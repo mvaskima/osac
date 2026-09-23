@@ -216,6 +216,7 @@ class GRPCClient:
         return response["object"]["id"]
 
     def update_security_group_rules(
+<<<<<<< HEAD
         self,
         *,
         sg_id: str,
@@ -223,6 +224,17 @@ class GRPCClient:
         egress: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         spec: dict[str, Any] = {}
+=======
+        self, *, sg_id: str, ingress: list[dict[str, Any]] | None = None, egress: list[dict[str, Any]] | None = None
+    ) -> None:
+        # Public SecurityGroups/Update was removed (OSAC-5373). Live rule
+        # changes use private Update. GET-merge the stored object so omitted
+        # spec fields, including immutable virtual_network, are not cleared.
+        current: dict[str, Any] = self.call(service=f"{PRIVATE_API}.SecurityGroups/Get", data={"id": sg_id})
+        obj = current.get("object")
+        existing: dict[str, Any] = obj if isinstance(obj, dict) else current
+        spec: dict[str, Any] = dict(existing.get("spec") or {})
+>>>>>>> 0fb10983b (OSAC-5457: fix copycat DHCP collision and SecurityGroup update payload)
         paths: list[str] = []
         if ingress is not None:
             spec["ingress"] = ingress
@@ -230,11 +242,21 @@ class GRPCClient:
         if egress is not None:
             spec["egress"] = egress
             paths.append("spec.egress")
+<<<<<<< HEAD
         if not paths:
             raise ValueError("update_security_group_rules requires ingress and/or egress")
         return self.call(
             service=f"{PRIVATE_API}.SecurityGroups/Update",
             data={"object": {"id": sg_id, "spec": spec}, "updateMask": {"paths": paths}},
+=======
+        payload: dict[str, Any] = {"id": sg_id, "spec": spec}
+        metadata = existing.get("metadata")
+        if isinstance(metadata, dict):
+            payload["metadata"] = metadata
+        self.call(
+            service=f"{PRIVATE_API}.SecurityGroups/Update",
+            data={"object": payload, "updateMask": {"paths": paths}},
+>>>>>>> 0fb10983b (OSAC-5457: fix copycat DHCP collision and SecurityGroup update payload)
         )
 
     # Console operations

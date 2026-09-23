@@ -19,7 +19,12 @@ _PROGRESS_LOG_INTERVAL_S = 30
 
 
 def run(*args: str, timeout: int = 300) -> str:
-    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=True)
+    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "").strip()
+        if err:
+            logger.error("Command failed (exit %s): %s", result.returncode, err)
+        raise subprocess.CalledProcessError(result.returncode, args, result.stdout, result.stderr)
     return result.stdout.strip()
 
 
