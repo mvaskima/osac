@@ -57,16 +57,19 @@ def ping(
     ticket = session["ticket"]
     url = _ws_url(fulfillment_address)
     ws = _ws_connect(url, ticket)
+
+    def recv(timeout: float, _ws: websocket.WebSocket = ws) -> str | None:
+        return _ws_recv(_ws, timeout)
+
+    send = ws.send_binary
     try:
-        _wait_for_login_prompt(send=ws.send_binary, recv=lambda timeout, _ws=ws: _ws_recv(_ws, timeout))
-        _authenticate(
-            send=ws.send_binary,
-            recv=lambda timeout, _ws=ws: _ws_recv(_ws, timeout),
-            username=username,
-            password=password,
-        )
-        return _run_ping(send=ws.send_binary, recv=lambda timeout, _ws=ws: _ws_recv(_ws, timeout), dest_ip=dest_ip)
+        if _wait_for_login_prompt(send=send, recv=recv) == "login":
+            _authenticate(send=send, recv=recv, username=username, password=password)
+        return _run_ping(send=send, recv=recv, dest_ip=dest_ip)
     finally:
+        with contextlib.suppress(Exception):
+            send(b"logout\n")
+            _collect_until(recv=recv, timeout=5.0, done=_has_login_prompt)
         with contextlib.suppress(Exception):
             ws.close()
             ws.shutdown()
@@ -105,6 +108,7 @@ def _wait_for_login_prompt(
     timeout: float = _LOGIN_TIMEOUT_S,
     enter_interval: float = _ENTER_INTERVAL_S,
 ) -> str:
+    """Return ``login`` when a login prompt appears, or ``shell`` if already logged in."""
     accumulated = ""
     deadline = time.monotonic() + timeout
     next_enter = time.monotonic()
@@ -118,11 +122,18 @@ def _wait_for_login_prompt(
         if chunk:
             accumulated += chunk
             logger.info("Received %d bytes waiting for login prompt", len(chunk))
-            if "login" in accumulated.lower():
-                return accumulated
+            if _has_login_prompt(accumulated):
+                return "login"
+            if _logged_in(accumulated, CONSOLE_USER):
+                return "shell"
     raise AssertionError(
         f"Console did not show login prompt within {timeout:.0f}s. Received {len(accumulated)} bytes total."
     )
+
+
+def _has_login_prompt(text: str) -> bool:
+    normalized = text.replace("\r", "")
+    return bool(re.search(r"(?im)^[^\n]*login:\s*$", normalized))
 
 
 def _authenticate(
@@ -158,15 +169,12 @@ def _run_ping(
     timeout: float = _PING_TIMEOUT_S,
 ) -> bool:
     send(f"ping -c 3 -W 2 {dest_ip}; echo PING_RC:$?\n".encode())
-    accumulated = _collect_until(recv=recv, timeout=timeout, done=lambda text: "PING_RC:" in text)
+    accumulated = _collect_until(recv=recv, timeout=timeout, done=lambda text: bool(re.search(r"PING_RC:\d+", text)))
     logger.info("Guest ping output (%d bytes): %s", len(accumulated), accumulated[-1024:])
     match = re.search(r"PING_RC:(\d+)", accumulated)
-    if match:
-        return match.group(1) == "0"
-    lower = accumulated.lower()
-    if "100% packet loss" in lower or "network is unreachable" in lower:
-        return False
-    return bool(re.search(r"[1-9]\d* (packets )?received", lower)) and " 0% packet loss" in lower
+    if not match:
+        raise AssertionError(f"Guest ping did not report PING_RC. Received: {accumulated[-500:]!r}")
+    return match.group(1) == "0"
 
 
 def _collect_until(*, recv: Callable[[float], str | None], timeout: float, done: Callable[[str], bool]) -> str:

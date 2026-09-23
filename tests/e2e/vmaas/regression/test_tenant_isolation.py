@@ -139,18 +139,38 @@ def _create_global_disk_image(private_grpc: GRPCClient, name: str) -> str:
     return str(_object(resp)["id"])
 
 
-def _provision_overlay(client: GRPCClient, k8s: K8sClient, *, prefix: str, cidr: str) -> dict[str, str]:
+def _provision_overlay(
+    client: GRPCClient,
+    k8s: K8sClient,
+    *,
+    prefix: str,
+    cidr: str,
+    state: dict[str, Any] | None = None,
+    state_prefix: str = "",
+) -> dict[str, str]:
+    def _store(key: str, value: str) -> None:
+        if state is not None:
+            state[f"{state_prefix}_{key}"] = value
+
     vn_id = client.create_virtual_network(name=f"{prefix}-vn", ipv4_cidr=cidr)
+    _store("vn_id", vn_id)
     vn_cr = wait_for_virtual_network_cr(k8s=k8s, uuid=vn_id)
+    _store("vn_cr", vn_cr)
     wait_for_virtual_network_ready(k8s=k8s, name=vn_cr)
     subnet_id = client.create_subnet(name=f"{prefix}-sn", virtual_network=vn_id, ipv4_cidr=cidr)
+    _store("subnet_id", subnet_id)
     subnet_cr = wait_for_subnet_cr(k8s=k8s, uuid=subnet_id)
+    _store("subnet_cr", subnet_cr)
     wait_for_subnet_ready(k8s=k8s, name=subnet_cr)
     sg_id = client.create_security_group_with_rules(
         name=f"{prefix}-sg", virtual_network=vn_id, ingress=ALLOW_ALL_INGRESS, egress=ALLOW_ALL_EGRESS
     )
+    _store("sg_id", sg_id)
     sg_cr = wait_for_security_group_cr(k8s=k8s, uuid=sg_id)
+    _store("sg_cr", sg_cr)
     wait_for_security_group_ready(k8s=k8s, name=sg_cr)
+    if state is not None:
+        state[f"{state_prefix}_cidr"] = cidr
     return {
         "vn_id": vn_id,
         "vn_cr": vn_cr,
@@ -160,6 +180,36 @@ def _provision_overlay(client: GRPCClient, k8s: K8sClient, *, prefix: str, cidr:
         "sg_cr": sg_cr,
         "cidr": cidr,
     }
+
+
+def _create_running_vm(
+    client: GRPCClient,
+    k8s: K8sClient,
+    *,
+    state: dict[str, Any],
+    key: str,
+    name: str,
+    template: str,
+    disk_image_name: str,
+    subnet_id: str,
+    sg_id: str,
+    instance_type: str,
+    storage_tier: str,
+) -> dict[str, str]:
+    ci_id = _create_vm(
+        client,
+        name=name,
+        template=template,
+        disk_image_name=disk_image_name,
+        subnet_id=subnet_id,
+        sg_id=sg_id,
+        instance_type=instance_type,
+        storage_tier=storage_tier,
+    )
+    state[key] = {"id": ci_id}
+    vm = _wait_running_vm(client, k8s, ci_id)
+    state[key] = vm
+    return vm
 
 
 def _create_vm(
@@ -214,11 +264,20 @@ def _guest_ping(client: GRPCClient, fulfillment_address: str, vm_id: str, dest_i
     return console.ping(grpc=client, fulfillment_address=fulfillment_address, vm_id=vm_id, dest_ip=dest_ip)
 
 
+def _guest_ping_retrying(client: GRPCClient, fulfillment_address: str, vm_id: str, dest_ip: str) -> bool:
+    """Treat console/login glitches as not-yet-ready so success polls can retry."""
+    try:
+        return _guest_ping(client, fulfillment_address, vm_id, dest_ip)
+    except AssertionError as exc:
+        logger.warning("Guest ping not yet observable: %s", exc)
+        return False
+
+
 def _assert_ping_succeeds(
     client: GRPCClient, fulfillment_address: str, vm_id: str, dest_ip: str, description: str
 ) -> None:
     poll_until(
-        fn=lambda: _guest_ping(client, fulfillment_address, vm_id, dest_ip),
+        fn=lambda: _guest_ping_retrying(client, fulfillment_address, vm_id, dest_ip),
         until=lambda ok: ok,
         retries=12,
         delay=10,
@@ -230,7 +289,11 @@ def _assert_ping_fails(
     client: GRPCClient, fulfillment_address: str, vm_id: str, dest_ip: str, description: str
 ) -> None:
     for attempt in range(3):
-        if _guest_ping(client, fulfillment_address, vm_id, dest_ip):
+        try:
+            ok = _guest_ping(client, fulfillment_address, vm_id, dest_ip)
+        except AssertionError as exc:
+            pytest.fail(f"{description} did not observe ICMP (attempt {attempt + 1}): {exc}")
+        if ok:
             pytest.fail(f"{description} unexpectedly succeeded (attempt {attempt + 1})")
 
 
@@ -346,36 +409,34 @@ class TestVmaasTenantIsolation:
         test_run_id: str,
     ) -> None:
         self.__class__.state.clear()
+        state = self.__class__.state
         t1_cidr, t2_cidr = _tenant_cidrs(test_run_id)
+        state["t1_cidr"] = t1_cidr
+        state["t2_cidr"] = t2_cidr
         global_di_id = _create_global_disk_image(private_grpc, unique_name(f"iso-global-{test_run_id}"))
-        t1_overlay = _provision_overlay(jwt_grpc_tenant1, k8s_hub_client, prefix=f"iso-t1-{test_run_id}", cidr=t1_cidr)
-        t2_overlay = _provision_overlay(jwt_grpc_tenant2, k8s_hub_client, prefix=f"iso-t2-{test_run_id}", cidr=t2_cidr)
+        state["global_di_id"] = global_di_id
+        t1_overlay = _provision_overlay(
+            jwt_grpc_tenant1,
+            k8s_hub_client,
+            prefix=f"iso-t1-{test_run_id}",
+            cidr=t1_cidr,
+            state=state,
+            state_prefix="t1",
+        )
+        t2_overlay = _provision_overlay(
+            jwt_grpc_tenant2,
+            k8s_hub_client,
+            prefix=f"iso-t2-{test_run_id}",
+            cidr=t2_cidr,
+            state=state,
+            state_prefix="t2",
+        )
         t1_di_name = unique_name(f"iso-t1-di-{test_run_id}")
         t2_di_name = unique_name(f"iso-t2-di-{test_run_id}")
         t1_di_id = jwt_grpc_tenant1.create_disk_image(name=t1_di_name, source_ref=SOURCE_REF)
+        state.update(t1_di_id=t1_di_id, t1_di_name=t1_di_name)
         t2_di_id = jwt_grpc_tenant2.create_disk_image(name=t2_di_name, source_ref=SOURCE_REF)
-
-        self.__class__.state.update(
-            t1_cidr=t1_cidr,
-            t2_cidr=t2_cidr,
-            global_di_id=global_di_id,
-            t1_di_id=t1_di_id,
-            t1_di_name=t1_di_name,
-            t2_di_id=t2_di_id,
-            t2_di_name=t2_di_name,
-            t1_vn_id=t1_overlay["vn_id"],
-            t1_vn_cr=t1_overlay["vn_cr"],
-            t1_subnet_id=t1_overlay["subnet_id"],
-            t1_subnet_cr=t1_overlay["subnet_cr"],
-            t1_sg_id=t1_overlay["sg_id"],
-            t1_sg_cr=t1_overlay["sg_cr"],
-            t2_vn_id=t2_overlay["vn_id"],
-            t2_vn_cr=t2_overlay["vn_cr"],
-            t2_subnet_id=t2_overlay["subnet_id"],
-            t2_subnet_cr=t2_overlay["subnet_cr"],
-            t2_sg_id=t2_overlay["sg_id"],
-            t2_sg_cr=t2_overlay["sg_cr"],
-        )
+        state.update(t2_di_id=t2_di_id, t2_di_name=t2_di_name)
 
         for service, resource_id in (
             (_ADMIN_GET["vn"], t1_overlay["vn_id"]),
@@ -400,6 +461,9 @@ class TestVmaasTenantIsolation:
         assert t1_di_id not in t2_images
         _assert_not_found(lambda: jwt_grpc_tenant2.get_disk_image(disk_image_id=t1_di_id))
 
+        assert t1_overlay["vn_id"] in jwt_grpc_tenant1.list_virtual_network_ids()
+        assert t1_overlay["subnet_id"] in jwt_grpc_tenant1.list_subnet_ids()
+        assert t1_overlay["sg_id"] in jwt_grpc_tenant1.list_security_group_ids()
         assert t2_overlay["vn_id"] not in jwt_grpc_tenant1.list_virtual_network_ids()
         assert t2_overlay["subnet_id"] not in jwt_grpc_tenant1.list_subnet_ids()
         assert t2_overlay["sg_id"] not in jwt_grpc_tenant1.list_security_group_ids()
@@ -407,6 +471,9 @@ class TestVmaasTenantIsolation:
         _assert_not_found(lambda: jwt_grpc_tenant1.get_subnet(subnet_id=t2_overlay["subnet_id"]))
         _assert_not_found(lambda: jwt_grpc_tenant1.get_security_group(sg_id=t2_overlay["sg_id"]))
 
+        assert t2_overlay["vn_id"] in jwt_grpc_tenant2.list_virtual_network_ids()
+        assert t2_overlay["subnet_id"] in jwt_grpc_tenant2.list_subnet_ids()
+        assert t2_overlay["sg_id"] in jwt_grpc_tenant2.list_security_group_ids()
         assert t1_overlay["vn_id"] not in jwt_grpc_tenant2.list_virtual_network_ids()
         assert t1_overlay["subnet_id"] not in jwt_grpc_tenant2.list_subnet_ids()
         assert t1_overlay["sg_id"] not in jwt_grpc_tenant2.list_security_group_ids()
@@ -426,67 +493,62 @@ class TestVmaasTenantIsolation:
         test_run_id: str,
     ) -> None:
         _require(self.state, "t1_subnet_id", "t1_sg_id", "t1_di_name", "t2_subnet_id", "t2_sg_id", "t2_di_name")
+        state = self.__class__.state
 
-        t1_vm1 = _wait_running_vm(
+        t1_vm1 = _create_running_vm(
             jwt_grpc_tenant1,
             k8s_hub_client,
-            _create_vm(
-                jwt_grpc_tenant1,
-                name=unique_name(f"iso-t1-vm1-{test_run_id}"),
-                template=vm_template,
-                disk_image_name=self.state["t1_di_name"],
-                subnet_id=self.state["t1_subnet_id"],
-                sg_id=self.state["t1_sg_id"],
-                instance_type=default_instance_type,
-                storage_tier=default_storage_tier,
-            ),
+            state=state,
+            key="t1_vm1",
+            name=unique_name(f"iso-t1-vm1-{test_run_id}"),
+            template=vm_template,
+            disk_image_name=state["t1_di_name"],
+            subnet_id=state["t1_subnet_id"],
+            sg_id=state["t1_sg_id"],
+            instance_type=default_instance_type,
+            storage_tier=default_storage_tier,
         )
-        t1_vm2 = _wait_running_vm(
+        t1_vm2 = _create_running_vm(
             jwt_grpc_tenant1,
             k8s_hub_client,
-            _create_vm(
-                jwt_grpc_tenant1,
-                name=unique_name(f"iso-t1-vm2-{test_run_id}"),
-                template=vm_template,
-                disk_image_name=self.state["t1_di_name"],
-                subnet_id=self.state["t1_subnet_id"],
-                sg_id=self.state["t1_sg_id"],
-                instance_type=default_instance_type,
-                storage_tier=default_storage_tier,
-            ),
+            state=state,
+            key="t1_vm2",
+            name=unique_name(f"iso-t1-vm2-{test_run_id}"),
+            template=vm_template,
+            disk_image_name=state["t1_di_name"],
+            subnet_id=state["t1_subnet_id"],
+            sg_id=state["t1_sg_id"],
+            instance_type=default_instance_type,
+            storage_tier=default_storage_tier,
         )
-        t2_vm1 = _wait_running_vm(
+        t2_vm1 = _create_running_vm(
             jwt_grpc_tenant2,
             k8s_hub_client,
-            _create_vm(
-                jwt_grpc_tenant2,
-                name=unique_name(f"iso-t2-vm1-{test_run_id}"),
-                template=vm_template,
-                disk_image_name=self.state["t2_di_name"],
-                subnet_id=self.state["t2_subnet_id"],
-                sg_id=self.state["t2_sg_id"],
-                instance_type=default_instance_type,
-                storage_tier=default_storage_tier,
-            ),
+            state=state,
+            key="t2_vm1",
+            name=unique_name(f"iso-t2-vm1-{test_run_id}"),
+            template=vm_template,
+            disk_image_name=state["t2_di_name"],
+            subnet_id=state["t2_subnet_id"],
+            sg_id=state["t2_sg_id"],
+            instance_type=default_instance_type,
+            storage_tier=default_storage_tier,
         )
-        t2_vm2 = _wait_running_vm(
+        t2_vm2 = _create_running_vm(
             jwt_grpc_tenant2,
             k8s_hub_client,
-            _create_vm(
-                jwt_grpc_tenant2,
-                name=unique_name(f"iso-t2-vm2-{test_run_id}"),
-                template=vm_template,
-                disk_image_name=self.state["t2_di_name"],
-                subnet_id=self.state["t2_subnet_id"],
-                sg_id=self.state["t2_sg_id"],
-                instance_type=default_instance_type,
-                storage_tier=default_storage_tier,
-            ),
+            state=state,
+            key="t2_vm2",
+            name=unique_name(f"iso-t2-vm2-{test_run_id}"),
+            template=vm_template,
+            disk_image_name=state["t2_di_name"],
+            subnet_id=state["t2_subnet_id"],
+            sg_id=state["t2_sg_id"],
+            instance_type=default_instance_type,
+            storage_tier=default_storage_tier,
         )
 
-        self.__class__.state.update(t1_vm1=t1_vm1, t1_vm2=t1_vm2, t2_vm1=t2_vm1, t2_vm2=t2_vm2)
-
-        assert _ip_in_cidr(t1_vm1["ip"], self.state["t1_cidr"])
+        assert _ip_in_cidr(t1_vm1["ip"], state["t1_cidr"])
         assert _ip_in_cidr(t1_vm2["ip"], self.state["t1_cidr"])
         assert _ip_in_cidr(t2_vm1["ip"], self.state["t2_cidr"])
         assert _ip_in_cidr(t2_vm2["ip"], self.state["t2_cidr"])
@@ -547,31 +609,28 @@ class TestVmaasTenantIsolation:
         )
 
         copycat = _provision_overlay(
-            jwt_grpc_tenant2, k8s_hub_client, prefix=f"iso-copycat-{test_run_id}", cidr=self.state["t1_cidr"]
-        )
-        copycat_vm = _wait_running_vm(
             jwt_grpc_tenant2,
             k8s_hub_client,
-            _create_vm(
-                jwt_grpc_tenant2,
-                name=unique_name(f"iso-copycat-{test_run_id}"),
-                template=vm_template,
-                disk_image_name=self.state["t2_di_name"],
-                subnet_id=copycat["subnet_id"],
-                sg_id=copycat["sg_id"],
-                instance_type=default_instance_type,
-                storage_tier=default_storage_tier,
-            ),
+            prefix=f"iso-copycat-{test_run_id}",
+            cidr=self.state["t1_cidr"],
+            state=self.__class__.state,
+            state_prefix="copycat",
         )
-        self.__class__.state.update(
-            copycat_vn_id=copycat["vn_id"],
-            copycat_vn_cr=copycat["vn_cr"],
-            copycat_subnet_id=copycat["subnet_id"],
-            copycat_subnet_cr=copycat["subnet_cr"],
-            copycat_sg_id=copycat["sg_id"],
-            copycat_sg_cr=copycat["sg_cr"],
-            copycat_vm=copycat_vm,
+        copycat_vm = _create_running_vm(
+            jwt_grpc_tenant2,
+            k8s_hub_client,
+            state=self.__class__.state,
+            key="copycat_vm",
+            name=unique_name(f"iso-copycat-{test_run_id}"),
+            template=vm_template,
+            disk_image_name=self.state["t2_di_name"],
+            subnet_id=copycat["subnet_id"],
+            sg_id=copycat["sg_id"],
+            instance_type=default_instance_type,
+            storage_tier=default_storage_tier,
         )
+        assert _ip_in_cidr(copycat_vm["ip"], self.state["t1_cidr"])
+        assert copycat_vm["ip"] not in {self.state["t1_vm1"]["ip"], self.state["t1_vm2"]["ip"]}
         _assert_ping_fails(
             jwt_grpc_tenant1,
             fulfillment_address,
@@ -589,6 +648,7 @@ class TestVmaasTenantIsolation:
         jwt_grpc_tenant1.update_security_group_rules(sg_id=sg_id, ingress=[])
         sg = jwt_grpc_tenant1.get_security_group(sg_id=sg_id)
         assert _rule_list(_spec(sg), "ingress") == []
+        assert _rule_list(_spec(sg), "egress"), "ingress-only update must leave egress rules"
         _assert_ping_succeeds(
             jwt_grpc_tenant1, fulfillment_address, vm1["id"], dest_ip, "ICMP after ingress-only SecurityGroup clear"
         )
