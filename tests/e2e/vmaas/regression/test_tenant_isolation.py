@@ -42,6 +42,7 @@ ALLOW_ALL_INGRESS: list[dict[str, str]] = [
     {"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"},
 ]
 ALLOW_ALL_EGRESS: list[dict[str, str]] = [{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}]
+COPYCAT_IP_ATTEMPTS = 3
 
 _ADMIN_GET = {
     "vn": f"{PRIVATE_API}.VirtualNetworks/Get",
@@ -309,6 +310,52 @@ def _assert_ping_stops(
     )
 
 
+def _create_copycat_vm(
+    client: GRPCClient,
+    k8s: K8sClient,
+    *,
+    state: dict[str, Any],
+    reserved_ips: set[str],
+    name_prefix: str,
+    template: str,
+    disk_image_name: str,
+    subnet_id: str,
+    sg_id: str,
+    instance_type: str,
+    storage_tier: str,
+) -> dict[str, str]:
+    created: list[dict[str, str]] = list(state.get("copycat_vms") or [])
+    chosen: dict[str, str] | None = None
+    for attempt in range(COPYCAT_IP_ATTEMPTS):
+        vm = _create_running_vm(
+            client,
+            k8s,
+            state=state,
+            key="copycat_vm",
+            name=unique_name(f"{name_prefix}-{attempt}"),
+            template=template,
+            disk_image_name=disk_image_name,
+            subnet_id=subnet_id,
+            sg_id=sg_id,
+            instance_type=instance_type,
+            storage_tier=storage_tier,
+        )
+        created.append(vm)
+        state["copycat_vms"] = created
+        if vm["ip"] not in reserved_ips:
+            chosen = vm
+            break
+        logger.warning(
+            "Copycat VM %s received %s, which is already in use on Tenant-1; creating another VM", vm["id"], vm["ip"]
+        )
+    if chosen is None:
+        pytest.fail(
+            f"copycat DHCP assigned only Tenant-1 addresses {sorted(reserved_ips)} "
+            f"across {COPYCAT_IP_ATTEMPTS} VMs; pinging those IPs would be on-overlay"
+        )
+    return chosen
+
+
 def _best_effort_delete_vm(client: GRPCClient, k8s: K8sClient, vm: dict[str, str] | None) -> None:
     if not vm or not vm.get("id"):
         return
@@ -368,7 +415,12 @@ def _cleanup_resources(
     _best_effort_delete_vm(jwt_grpc_tenant1, k8s, state.get("t1_vm2"))
     _best_effort_delete_vm(jwt_grpc_tenant2, k8s, state.get("t2_vm1"))
     _best_effort_delete_vm(jwt_grpc_tenant2, k8s, state.get("t2_vm2"))
-    _best_effort_delete_vm(jwt_grpc_tenant2, k8s, state.get("copycat_vm"))
+    copycat_vms = state.get("copycat_vms")
+    if isinstance(copycat_vms, list) and copycat_vms:
+        for vm in copycat_vms:
+            _best_effort_delete_vm(jwt_grpc_tenant2, k8s, vm)
+    else:
+        _best_effort_delete_vm(jwt_grpc_tenant2, k8s, state.get("copycat_vm"))
     _best_effort_delete_overlay(jwt_grpc_tenant2, k8s, "copycat", state)
     _best_effort_delete_overlay(jwt_grpc_tenant1, k8s, "t1", state)
     _best_effort_delete_overlay(jwt_grpc_tenant2, k8s, "t2", state)
@@ -616,12 +668,12 @@ class TestVmaasTenantIsolation:
             state=self.__class__.state,
             state_prefix="copycat",
         )
-        copycat_vm = _create_running_vm(
+        copycat_vm = _create_copycat_vm(
             jwt_grpc_tenant2,
             k8s_hub_client,
             state=self.__class__.state,
-            key="copycat_vm",
-            name=unique_name(f"iso-copycat-{test_run_id}"),
+            reserved_ips={self.state["t1_vm1"]["ip"], self.state["t1_vm2"]["ip"]},
+            name_prefix=f"iso-copycat-{test_run_id}",
             template=vm_template,
             disk_image_name=self.state["t2_di_name"],
             subnet_id=copycat["subnet_id"],
@@ -630,7 +682,6 @@ class TestVmaasTenantIsolation:
             storage_tier=default_storage_tier,
         )
         assert _ip_in_cidr(copycat_vm["ip"], self.state["t1_cidr"])
-        assert copycat_vm["ip"] not in {self.state["t1_vm1"]["ip"], self.state["t1_vm2"]["ip"]}
         _assert_ping_fails(
             jwt_grpc_tenant1,
             fulfillment_address,
@@ -673,16 +724,32 @@ class TestVmaasTenantIsolation:
     def test_06_tenant2_deletes_vms(self, jwt_grpc_tenant2: GRPCClient, k8s_hub_client: K8sClient) -> None:
         _require(self.state, "t2_vm1", "t2_vm2")
         deleted: list[str] = []
-        for key in ("t2_vm1", "t2_vm2", "copycat_vm"):
+        to_delete: list[tuple[str | None, dict[str, str]]] = []
+        for key in ("t2_vm1", "t2_vm2"):
             vm = self.state.get(key)
-            if not vm:
+            if vm:
+                to_delete.append((key, vm))
+        copycat_vms = self.state.get("copycat_vms")
+        if isinstance(copycat_vms, list) and copycat_vms:
+            for vm in copycat_vms:
+                to_delete.append((None, vm))
+        elif self.state.get("copycat_vm"):
+            to_delete.append(("copycat_vm", self.state["copycat_vm"]))
+        seen: set[str] = set()
+        for key, vm in to_delete:
+            ci_id = vm["id"]
+            if ci_id in seen:
                 continue
-            jwt_grpc_tenant2.delete_compute_instance(ci_id=vm["id"])
+            seen.add(ci_id)
+            jwt_grpc_tenant2.delete_compute_instance(ci_id=ci_id)
             if vm.get("cr"):
                 wait_for_deletion(k8s=k8s_hub_client, name=vm["cr"])
-            wait_for_grpc_removal(grpc=jwt_grpc_tenant2, uuid=vm["id"])
-            deleted.append(vm["id"])
-            self.state.pop(key, None)
+            wait_for_grpc_removal(grpc=jwt_grpc_tenant2, uuid=ci_id)
+            deleted.append(ci_id)
+            if key:
+                self.state.pop(key, None)
+        self.state.pop("copycat_vms", None)
+        self.state.pop("copycat_vm", None)
         remaining = jwt_grpc_tenant2.list_compute_instance_ids()
         for ci_id in deleted:
             assert ci_id not in remaining
