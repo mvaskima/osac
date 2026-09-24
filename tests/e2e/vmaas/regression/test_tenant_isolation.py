@@ -696,30 +696,41 @@ class TestVmaasTenantIsolation:
         vm1 = self.state["t1_vm1"]
         dest_ip = self.state["t1_vm2"]["ip"]
 
-        jwt_grpc_tenant1.update_security_group_rules(sg_id=sg_id, ingress=[])
-        sg = jwt_grpc_tenant1.get_security_group(sg_id=sg_id)
-        assert _rule_list(_spec(sg), "ingress") == []
-        assert _rule_list(_spec(sg), "egress"), "ingress-only update must leave egress rules"
-        _assert_ping_succeeds(
-            jwt_grpc_tenant1, fulfillment_address, vm1["id"], dest_ip, "ICMP after ingress-only SecurityGroup clear"
-        )
+        def _restore_allow_all() -> None:
+            jwt_grpc_tenant1.update_security_group_rules(
+                sg_id=sg_id, ingress=ALLOW_ALL_INGRESS, egress=ALLOW_ALL_EGRESS
+            )
 
-        jwt_grpc_tenant1.update_security_group_rules(sg_id=sg_id, ingress=[], egress=[])
-        sg = jwt_grpc_tenant1.get_security_group(sg_id=sg_id)
-        assert _rule_list(_spec(sg), "ingress") == []
-        assert _rule_list(_spec(sg), "egress") == []
-        _assert_ping_stops(
-            jwt_grpc_tenant1,
-            fulfillment_address,
-            vm1["id"],
-            dest_ip,
-            "ICMP after ingress and egress SecurityGroup clear",
-        )
+        try:
+            jwt_grpc_tenant1.update_security_group_rules(sg_id=sg_id, ingress=[])
+            sg = jwt_grpc_tenant1.get_security_group(sg_id=sg_id)
+            assert _rule_list(_spec(sg), "ingress") == []
+            assert _rule_list(_spec(sg), "egress"), "ingress-only update must leave egress rules"
+            _assert_ping_succeeds(
+                jwt_grpc_tenant1, fulfillment_address, vm1["id"], dest_ip, "ICMP after ingress-only SecurityGroup clear"
+            )
 
-        jwt_grpc_tenant1.update_security_group_rules(sg_id=sg_id, ingress=ALLOW_ALL_INGRESS, egress=ALLOW_ALL_EGRESS)
-        _assert_ping_succeeds(
-            jwt_grpc_tenant1, fulfillment_address, vm1["id"], dest_ip, "ICMP after SecurityGroup restore"
-        )
+            jwt_grpc_tenant1.update_security_group_rules(sg_id=sg_id, ingress=[], egress=[])
+            sg = jwt_grpc_tenant1.get_security_group(sg_id=sg_id)
+            assert _rule_list(_spec(sg), "ingress") == []
+            assert _rule_list(_spec(sg), "egress") == []
+            _assert_ping_stops(
+                jwt_grpc_tenant1,
+                fulfillment_address,
+                vm1["id"],
+                dest_ip,
+                "ICMP after ingress and egress SecurityGroup clear",
+            )
+
+            _restore_allow_all()
+            _assert_ping_succeeds(
+                jwt_grpc_tenant1, fulfillment_address, vm1["id"], dest_ip, "ICMP after SecurityGroup restore"
+            )
+        finally:
+            try:
+                _restore_allow_all()
+            except Exception as exc:
+                logger.warning("Failed to restore Tenant-1 SecurityGroup %s: %s", sg_id, exc)
 
     def test_06_tenant2_deletes_vms(self, jwt_grpc_tenant2: GRPCClient, k8s_hub_client: K8sClient) -> None:
         _require(self.state, "t2_vm1", "t2_vm2")
