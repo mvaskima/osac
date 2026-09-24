@@ -690,19 +690,19 @@ class TestVmaasTenantIsolation:
             "Copycat same-CIDR ICMP",
         )
 
-    def test_05_live_security_group_stateful(self, jwt_grpc_tenant1: GRPCClient, fulfillment_address: str) -> None:
+    def test_05_live_security_group_stateful(
+        self, jwt_grpc_tenant1: GRPCClient, private_grpc: GRPCClient, fulfillment_address: str
+    ) -> None:
         _require(self.state, "t1_sg_id", "t1_vm1", "t1_vm2")
         sg_id = self.state["t1_sg_id"]
         vm1 = self.state["t1_vm1"]
         dest_ip = self.state["t1_vm2"]["ip"]
 
         def _restore_allow_all() -> None:
-            jwt_grpc_tenant1.update_security_group_rules(
-                sg_id=sg_id, ingress=ALLOW_ALL_INGRESS, egress=ALLOW_ALL_EGRESS
-            )
+            private_grpc.update_security_group_rules(sg_id=sg_id, ingress=ALLOW_ALL_INGRESS, egress=ALLOW_ALL_EGRESS)
 
         try:
-            jwt_grpc_tenant1.update_security_group_rules(sg_id=sg_id, ingress=[])
+            private_grpc.update_security_group_rules(sg_id=sg_id, ingress=[])
             sg = jwt_grpc_tenant1.get_security_group(sg_id=sg_id)
             assert _rule_list(_spec(sg), "ingress") == []
             assert _rule_list(_spec(sg), "egress"), "ingress-only update must leave egress rules"
@@ -710,7 +710,7 @@ class TestVmaasTenantIsolation:
                 jwt_grpc_tenant1, fulfillment_address, vm1["id"], dest_ip, "ICMP after ingress-only SecurityGroup clear"
             )
 
-            jwt_grpc_tenant1.update_security_group_rules(sg_id=sg_id, ingress=[], egress=[])
+            private_grpc.update_security_group_rules(sg_id=sg_id, ingress=[], egress=[])
             sg = jwt_grpc_tenant1.get_security_group(sg_id=sg_id)
             assert _rule_list(_spec(sg), "ingress") == []
             assert _rule_list(_spec(sg), "egress") == []
