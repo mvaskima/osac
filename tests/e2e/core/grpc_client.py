@@ -254,9 +254,13 @@ class GRPCClient:
         if isinstance(metadata, dict):
             payload["metadata"] = metadata
         self.call(
+<<<<<<< HEAD
             service=f"{PRIVATE_API}.SecurityGroups/Update",
             data={"object": payload, "updateMask": {"paths": paths}},
 >>>>>>> 0fb10983b (OSAC-5457: fix copycat DHCP collision and SecurityGroup update payload)
+=======
+            service=f"{PRIVATE_API}.SecurityGroups/Update", data={"object": payload, "updateMask": {"paths": paths}}
+>>>>>>> 5080fcb79 (OSAC-5457: mutate live SecurityGroup rules via private Update)
         )
 
     # Console operations
