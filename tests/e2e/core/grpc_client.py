@@ -206,8 +206,7 @@ class GRPCClient:
         if isinstance(metadata, dict):
             payload["metadata"] = metadata
         self.call(
-            service=f"{PRIVATE_API}.SecurityGroups/Update",
-            data={"object": payload, "updateMask": {"paths": paths}},
+            service=f"{PRIVATE_API}.SecurityGroups/Update", data={"object": payload, "updateMask": {"paths": paths}}
         )
 
     # Console operations
