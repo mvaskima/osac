@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import ipaddress
 import logging
 import re
 import ssl
@@ -44,6 +45,7 @@ def ping(
     Opens a new console ticket for each call and closes the session afterwards
     (tickets are single-use; a second concurrent session is rejected).
     """
+    dest_ip = _canonical_dest_ip(dest_ip)
     session = grpc.create_console_session(
         resource_type="CONSOLE_RESOURCE_TYPE_COMPUTE_INSTANCE", resource_id=vm_id, console_type="CONSOLE_TYPE_SERIAL"
     )
@@ -155,6 +157,13 @@ def _logged_in(text: str, username: str) -> bool:
     return "$" in text or "#" in text or f"{username}@" in lower
 
 
+def _canonical_dest_ip(dest_ip: str) -> str:
+    try:
+        return format(ipaddress.ip_address(dest_ip.strip()))
+    except ValueError as exc:
+        raise ValueError(f"invalid dest_ip {dest_ip!r}") from exc
+
+
 def _run_ping(
     *,
     send: Callable[[bytes], None],
@@ -162,6 +171,7 @@ def _run_ping(
     dest_ip: str,
     timeout: float = _PING_TIMEOUT_S,
 ) -> bool:
+    dest_ip = _canonical_dest_ip(dest_ip)
     send(f"ping -c 3 -W 2 {dest_ip}; echo PING_RC:$?\n".encode())
     accumulated = _collect_until(recv=recv, timeout=timeout, done=lambda text: bool(re.search(r"PING_RC:\d+", text)))
     logger.info("Guest ping output (%d bytes): %s", len(accumulated), accumulated[-1024:])
