@@ -54,6 +54,7 @@ def ping(
     ws = _ws_connect(url, ticket)
 
     def recv(timeout: float, _ws: websocket.WebSocket = ws) -> str | None:
+        """Read one serial-console WebSocket message, or None on timeout."""
         return _ws_recv(_ws, timeout)
 
     send = ws.send_binary
@@ -71,11 +72,13 @@ def ping(
 
 
 def _ws_url(fulfillment_address: str) -> str:
+    """Build the WebSocket console-proxy URL from a host:port fulfillment address."""
     host: str = fulfillment_address.rsplit(":", 1)[0]
     return f"wss://{host}{CONSOLE_WS_PATH}"
 
 
 def _ws_connect(url: str, ticket: str, timeout: int = 30) -> websocket.WebSocket:
+    """Open a binary WebSocket to the console proxy using the session ticket."""
     return websocket.create_connection(
         url,
         header={"Authorization": f"Bearer {ticket}"},
@@ -86,6 +89,7 @@ def _ws_connect(url: str, ticket: str, timeout: int = 30) -> websocket.WebSocket
 
 
 def _ws_recv(ws: websocket.WebSocket, timeout: float) -> str | None:
+    """Return decoded console bytes, or None if the read times out."""
     ws.settimeout(timeout)
     try:
         data = ws.recv()
@@ -128,6 +132,7 @@ def _wait_for_login_prompt(
 
 
 def _has_login_prompt(text: str) -> bool:
+    """Return True when accumulated console text ends with a login prompt."""
     normalized = text.replace("\r", "")
     return bool(re.search(r"(?im)^[^\n]*login:\s*$", normalized))
 
@@ -140,6 +145,7 @@ def _authenticate(
     password: str,
     timeout: float = _AUTH_TIMEOUT_S,
 ) -> None:
+    """Submit guest credentials at the serial login and password prompts."""
     send(f"{username}\n".encode())
     accumulated = _collect_until(recv=recv, timeout=timeout, done=lambda text: "password" in text.lower())
     if "password" not in accumulated.lower():
@@ -154,6 +160,7 @@ def _authenticate(
 
 
 def _logged_in(text: str, username: str) -> bool:
+    """Return True when console output looks like a logged-in shell prompt."""
     lower = text.lower()
     if "login incorrect" in lower:
         return False
@@ -161,6 +168,7 @@ def _logged_in(text: str, username: str) -> bool:
 
 
 def _canonical_dest_ip(dest_ip: str) -> str:
+    """Return a canonical IP string, or raise ValueError if dest_ip is not an address."""
     try:
         return format(ipaddress.ip_address(dest_ip.strip()))
     except ValueError as exc:
@@ -174,6 +182,7 @@ def _run_ping(
     dest_ip: str,
     timeout: float = _PING_TIMEOUT_S,
 ) -> bool:
+    """Run guest ping to dest_ip and return True when PING_RC is 0."""
     dest_ip = _canonical_dest_ip(dest_ip)
     send(f"ping -c 3 -W 2 {dest_ip}; echo PING_RC:$?\n".encode())
     accumulated = _collect_until(recv=recv, timeout=timeout, done=lambda text: bool(re.search(r"PING_RC:\d+", text)))
@@ -187,6 +196,7 @@ def _run_ping(
 
 
 def _collect_until(*, recv: Callable[[float], str | None], timeout: float, done: Callable[[str], bool]) -> str:
+    """Read console output until done(text) is true or timeout elapses."""
     accumulated = ""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
