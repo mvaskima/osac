@@ -143,11 +143,14 @@ def _authenticate(
     send(f"{username}\n".encode())
     accumulated = _collect_until(recv=recv, timeout=timeout, done=lambda text: "password" in text.lower())
     if "password" not in accumulated.lower():
-        raise AssertionError(f"Console did not prompt for password. Received: {accumulated[-500:]!r}")
+        raise AssertionError(f"Console did not prompt for password ({len(accumulated)} bytes, password_prompt=false)")
     send(f"{password}\n".encode())
     accumulated += _collect_until(recv=recv, timeout=timeout, done=lambda text: _logged_in(text, username))
     if not _logged_in(accumulated, username):
-        raise AssertionError(f"Console login failed for {username}. Received: {accumulated[-500:]!r}")
+        login_incorrect = "login incorrect" in accumulated.lower()
+        raise AssertionError(
+            f"Console login failed for {username} ({len(accumulated)} bytes, login_incorrect={login_incorrect})"
+        )
 
 
 def _logged_in(text: str, username: str) -> bool:
@@ -174,11 +177,13 @@ def _run_ping(
     dest_ip = _canonical_dest_ip(dest_ip)
     send(f"ping -c 3 -W 2 {dest_ip}; echo PING_RC:$?\n".encode())
     accumulated = _collect_until(recv=recv, timeout=timeout, done=lambda text: bool(re.search(r"PING_RC:\d+", text)))
-    logger.info("Guest ping output (%d bytes): %s", len(accumulated), accumulated[-1024:])
     match = re.search(r"PING_RC:(\d+)", accumulated)
     if not match:
-        raise AssertionError(f"Guest ping did not report PING_RC. Received: {accumulated[-500:]!r}")
-    return match.group(1) == "0"
+        logger.info("Guest ping did not report PING_RC (%d bytes)", len(accumulated))
+        raise AssertionError(f"Guest ping did not report PING_RC ({len(accumulated)} bytes)")
+    ok = match.group(1) == "0"
+    logger.info("Guest ping PING_RC=%s success=%s", match.group(1), ok)
+    return ok
 
 
 def _collect_until(*, recv: Callable[[float], str | None], timeout: float, done: Callable[[str], bool]) -> str:
