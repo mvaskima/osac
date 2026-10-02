@@ -168,11 +168,14 @@ def _logged_in(text: str, username: str) -> bool:
 
 
 def _canonical_dest_ip(dest_ip: str) -> str:
-    """Return a canonical IP string, or raise ValueError if dest_ip is not an address."""
+    """Return a canonical unscoped IP string, or raise ValueError if dest_ip is unsafe."""
     try:
-        return format(ipaddress.ip_address(dest_ip.strip()))
+        addr = ipaddress.ip_address(dest_ip.strip())
     except ValueError as exc:
         raise ValueError(f"invalid dest_ip {dest_ip!r}") from exc
+    if isinstance(addr, ipaddress.IPv6Address) and addr.scope_id:
+        raise ValueError(f"invalid dest_ip {dest_ip!r}: IPv6 scope IDs are not allowed")
+    return format(addr)
 
 
 def _run_ping(
