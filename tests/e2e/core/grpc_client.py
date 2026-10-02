@@ -196,6 +196,7 @@ class GRPCClient:
     def update_security_group_rules(
         self, *, sg_id: str, ingress: list[dict[str, Any]] | None = None, egress: list[dict[str, Any]] | None = None
     ) -> None:
+        """GET-merge then privately Update SecurityGroup ingress and/or egress rules."""
         # Public SecurityGroups/Update was removed (OSAC-5373). Live rule
         # changes use private Update. GET-merge the stored object so omitted
         # spec fields, including immutable virtual_network, are not cleared.
