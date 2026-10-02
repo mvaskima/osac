@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import os
 import subprocess
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
@@ -28,7 +30,7 @@ from tests.e2e.core.helpers import (
     wait_for_virtual_network_ready,
 )
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.core.runner import poll_until
+from tests.e2e.core.runner import env, poll_until
 from tests.e2e.vmaas.regression import tenant_isolation_console as console
 
 SOURCE_REF = "quay.io/containerdisks/fedora:41"
@@ -43,6 +45,22 @@ ALLOW_ALL_INGRESS: list[dict[str, str]] = [
 ]
 ALLOW_ALL_EGRESS: list[dict[str, str]] = [{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}]
 COPYCAT_IP_ATTEMPTS = 3
+
+
+def _guest_console_password() -> str:
+    file_path = os.environ.get("OSAC_CONSOLE_PASSWORD_FILE", "").strip()
+    if file_path:
+        text = Path(file_path).read_text(encoding="utf-8").strip()
+        if not text:
+            raise RuntimeError("OSAC_CONSOLE_PASSWORD_FILE is empty")
+        return text
+    return env("OSAC_CONSOLE_PASSWORD")
+
+
+@pytest.fixture(scope="class", autouse=True)
+def _require_guest_console_password() -> None:
+    _guest_console_password()
+
 
 _ADMIN_GET = {
     "vn": f"{PRIVATE_API}.VirtualNetworks/Get",
@@ -235,7 +253,7 @@ def _create_vm(
                     "instance_type": {"name": instance_type, "shared": True},
                     "boot_disk": {"storage_tier": {"name": storage_tier}},
                     "network_attachments": [{"subnet": {"id": subnet_id}, "security_groups": [{"id": sg_id}]}],
-                    "user_data": console.user_data(),
+                    "user_data": console.user_data(password=_guest_console_password()),
                 },
             }
         },
@@ -262,7 +280,13 @@ def _ip_in_cidr(ip: str, cidr: str) -> bool:
 
 
 def _guest_ping(client: GRPCClient, fulfillment_address: str, vm_id: str, dest_ip: str) -> bool:
-    return console.ping(grpc=client, fulfillment_address=fulfillment_address, vm_id=vm_id, dest_ip=dest_ip)
+    return console.ping(
+        grpc=client,
+        fulfillment_address=fulfillment_address,
+        vm_id=vm_id,
+        dest_ip=dest_ip,
+        password=_guest_console_password(),
+    )
 
 
 def _guest_ping_retrying(client: GRPCClient, fulfillment_address: str, vm_id: str, dest_ip: str) -> bool:

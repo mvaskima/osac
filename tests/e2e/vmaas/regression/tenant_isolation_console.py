@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 CONSOLE_WS_PATH = "/api/fulfillment/v1/console_sessions/connect"
 CONSOLE_USER = "fedora"
-CONSOLE_PASSWORD = "osace2e"
 
 _LOGIN_TIMEOUT_S = 300.0
 _AUTH_TIMEOUT_S = 60.0
@@ -23,7 +22,7 @@ _PING_TIMEOUT_S = 40.0
 _ENTER_INTERVAL_S = 15.0
 
 
-def user_data(*, username: str = CONSOLE_USER, password: str = CONSOLE_PASSWORD) -> str:
+def user_data(*, password: str, username: str = CONSOLE_USER) -> str:
     """Cloud-init userdata that sets a serial-console password for guest ping."""
     return (
         "#cloud-config\n"
@@ -38,13 +37,7 @@ def user_data(*, username: str = CONSOLE_USER, password: str = CONSOLE_PASSWORD)
 
 
 def ping(
-    *,
-    grpc: GRPCClient,
-    fulfillment_address: str,
-    vm_id: str,
-    dest_ip: str,
-    username: str = CONSOLE_USER,
-    password: str = CONSOLE_PASSWORD,
+    *, grpc: GRPCClient, fulfillment_address: str, vm_id: str, dest_ip: str, password: str, username: str = CONSOLE_USER
 ) -> bool:
     """Log in on the VM serial console and run ``ping -c 3 -W 2`` to dest_ip.
 
@@ -63,7 +56,7 @@ def ping(
 
     send = ws.send_binary
     try:
-        if _wait_for_login_prompt(send=send, recv=recv) == "login":
+        if _wait_for_login_prompt(send=send, recv=recv, username=username) == "login":
             _authenticate(send=send, recv=recv, username=username, password=password)
         return _run_ping(send=send, recv=recv, dest_ip=dest_ip)
     finally:
@@ -105,6 +98,7 @@ def _wait_for_login_prompt(
     *,
     send: Callable[[bytes], None],
     recv: Callable[[float], str | None],
+    username: str = CONSOLE_USER,
     timeout: float = _LOGIN_TIMEOUT_S,
     enter_interval: float = _ENTER_INTERVAL_S,
 ) -> str:
@@ -124,7 +118,7 @@ def _wait_for_login_prompt(
             logger.info("Received %d bytes waiting for login prompt", len(chunk))
             if _has_login_prompt(accumulated):
                 return "login"
-            if _logged_in(accumulated, CONSOLE_USER):
+            if _logged_in(accumulated, username):
                 return "shell"
     raise AssertionError(
         f"Console did not show login prompt within {timeout:.0f}s. Received {len(accumulated)} bytes total."
