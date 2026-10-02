@@ -94,13 +94,13 @@ func buildClusterVersionReference(cv *privatev1.ClusterVersion) *privatev1.Clust
 	return ref
 }
 
-// resolveDefaultClusterVersion looks up the system default ClusterVersion (spec.is_default == true),
-// validates it is usable, and returns a ClusterVersionReference.
+// resolveDefaultClusterVersion looks up and validates the system default ClusterVersion
+// (spec.is_default == true).
 func resolveDefaultClusterVersion(
 	ctx context.Context,
 	logger *slog.Logger,
 	clusterVersionsDao *dao.GenericDAO[*privatev1.ClusterVersion],
-) (*privatev1.ClusterVersionReference, error) {
+) (*privatev1.ClusterVersion, error) {
 	response, err := clusterVersionsDao.List().
 		SetFilter("this.spec.is_default == true && !has(this.metadata.deletion_timestamp)").
 		SetLimit(1).
@@ -126,5 +126,5 @@ func resolveDefaultClusterVersion(
 	if err := validateResolvedClusterVersion(cv, versionName, ""); err != nil {
 		return nil, err
 	}
-	return buildClusterVersionReference(cv), nil
+	return cv, nil
 }

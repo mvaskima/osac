@@ -223,6 +223,25 @@ class TestRealTemplateMetadata:
                 assert "@type" in dumped
                 assert "value" in dumped
 
+    def test_accepts_east_west_ethernet_capability(self):
+        metadata = Metadata.model_validate(
+            {
+                "title": "Netris",
+                "template_type": "network",
+                "capabilities": {
+                    "supports_east_west_ethernet": True,
+                },
+            }
+        )
+
+        assert metadata.capabilities == {"supports_east_west_ethernet": True}
+
+    def test_netris_metadata_contains_east_west_ethernet_capability(self):
+        metadata = _load_metadata(_roles_dir_path(), "netris")
+
+        assert metadata.capabilities["supports_east_west_ethernet"] is True
+        assert "supports_east_west" not in metadata.capabilities
+
 
 # ---------------------------------------------------------------------------
 # TestTypeMappingCompleteness
@@ -257,6 +276,7 @@ class TestMetadataTemplateTypes:
             ("ocp_small", TemplateTypeEnum.cluster),
             ("ocp_virt_vm", TemplateTypeEnum.compute_instance),
             ("cudn_net", TemplateTypeEnum.network),
+            ("agentless_net", TemplateTypeEnum.network),
             ("bm_host_agent_provisioning", TemplateTypeEnum.bare_metal_instance),
             ("vast_storage", TemplateTypeEnum.storage_provider),
             ("cert_manager", TemplateTypeEnum.addon_operator),

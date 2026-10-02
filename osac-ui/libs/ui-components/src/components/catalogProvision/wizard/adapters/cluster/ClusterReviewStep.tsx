@@ -8,6 +8,7 @@ import {
   Spinner,
   Stack,
   StackItem,
+  Title,
 } from '@patternfly/react-core';
 import { useFormikContext } from 'formik';
 
@@ -74,6 +75,9 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
     isLoading: projectsLoading,
     error: projectsError,
   } = useProjects({ filter: fullProjectPathToQueryFilter(values.metadata.project) });
+
+  const isCustomNetwork =
+    !values.spec.useDefaultNetwork && Boolean(values.spec.networkAttachment.subnet.id.trim());
 
   const versionDisplay = versionDisplayName(
     findVersionByName(versions, values.spec.versionName),
@@ -154,7 +158,68 @@ export const ClusterReviewStep = ({ catalogItem }: Props) => {
               {formatNodeSetsForReview(data, values.spec.nodeSetRows)}
             </DescriptionListDescription>
           </DescriptionListGroup>
+        </DescriptionList>
+      </StackItem>
 
+      <StackItem>
+        <Title headingLevel="h3">{t('Infrastructure Networking')}</Title>
+      </StackItem>
+      <StackItem>
+        <DescriptionList isHorizontal isCompact>
+          <DescriptionListGroup>
+            <DescriptionListTerm>{t('Network')}</DescriptionListTerm>
+            <DescriptionListDescription>
+              {isCustomNetwork ? t('Custom') : t('Tenant default')}
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+
+          {isCustomNetwork && (
+            <>
+              <DescriptionListGroup>
+                <DescriptionListTerm>{t('Virtual network')}</DescriptionListTerm>
+                <DescriptionListDescription>
+                  {formatReviewScalar(
+                    values.spec.networkAttachment.virtualNetwork.name ||
+                      values.spec.networkAttachment.virtualNetwork.id,
+                  )}
+                </DescriptionListDescription>
+              </DescriptionListGroup>
+              <DescriptionListGroup>
+                <DescriptionListTerm>{t('Subnet')}</DescriptionListTerm>
+                <DescriptionListDescription>
+                  {formatReviewScalar(
+                    values.spec.networkAttachment.subnet.name ||
+                      values.spec.networkAttachment.subnet.id,
+                  )}
+                </DescriptionListDescription>
+              </DescriptionListGroup>
+              <DescriptionListGroup>
+                <DescriptionListTerm>{t('Security groups')}</DescriptionListTerm>
+                <DescriptionListDescription>
+                  {values.spec.networkAttachment.securityGroups.length > 0
+                    ? values.spec.networkAttachment.securityGroups
+                        .map((sg) => sg.name || sg.id)
+                        .join(', ')
+                    : '—'}
+                </DescriptionListDescription>
+              </DescriptionListGroup>
+            </>
+          )}
+
+          <DescriptionListGroup>
+            <DescriptionListTerm>{t('Auto attach external IP')}</DescriptionListTerm>
+            <DescriptionListDescription>
+              {values.spec.autoExternalIpAttachment ? t('Yes') : t('No')}
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+        </DescriptionList>
+      </StackItem>
+
+      <StackItem>
+        <Title headingLevel="h3">{t('Cluster Networking')}</Title>
+      </StackItem>
+      <StackItem>
+        <DescriptionList isHorizontal isCompact>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Pod CIDR')}</DescriptionListTerm>
             <DescriptionListDescription>

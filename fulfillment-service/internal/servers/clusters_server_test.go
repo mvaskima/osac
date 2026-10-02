@@ -295,6 +295,62 @@ var _ = Describe("Clusters server", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			expectAddOnOperatorFieldViolation(err, "spec.add_on_operators[0]")
+			Expect(status.Message()).To(ContainSubstring("not found"))
+		})
+
+		It("rejects a published add-on operator with an unpublished dependency during public create", func() {
+			dependency := newTestAddOnOperator("unpublished-dependency-id", "unpublished-dependency", false)
+			seedAddOnOperatorObject(ctx, dependency)
+			root := newTestAddOnOperator("published-root-id", "published-root", true)
+			root.SetDependencies([]*privatev1.AddOnOperatorLocalReference{
+				privatev1.AddOnOperatorLocalReference_builder{Id: dependency.GetId()}.Build(),
+			})
+			seedAddOnOperatorObject(ctx, root)
+
+			_, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+					Spec: publicv1.ClusterSpec_builder{
+						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
+						AddOnOperators: []*publicv1.AddOnOperatorReference{
+							publicv1.AddOnOperatorReference_builder{Name: root.GetMetadata().GetName()}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			expectAddOnOperatorFieldViolation(err, "spec.add_on_operators[0]")
+			Expect(status.Message()).To(ContainSubstring("not found"))
+		})
+
+		It("rejects a deleted add-on operator as not found during public create", func() {
+			seedAddOnOperator(ctx, "deleted-operator-id", "deleted-operator", true)
+			operatorDao, err := dao.NewGenericDAO[*privatev1.AddOnOperator]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = operatorDao.Delete().SetId("deleted-operator-id").Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Create(ctx, publicv1.ClustersCreateRequest_builder{
+				Object: publicv1.Cluster_builder{
+					Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+					Spec: publicv1.ClusterSpec_builder{
+						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
+						AddOnOperators: []*publicv1.AddOnOperatorReference{
+							publicv1.AddOnOperatorReference_builder{Name: "deleted-operator"}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			expectAddOnOperatorFieldViolation(err, "spec.add_on_operators[0]")
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("not found"))
 		})
 
 		It("Creates object", func() {
@@ -347,11 +403,9 @@ var _ = Describe("Clusters server", func() {
 			nodeSets := object.GetSpec().GetNodeSets()
 			Expect(nodeSets).To(HaveKey("compute"))
 			computeNodeSet := nodeSets["compute"]
-			Expect(computeNodeSet.GetHostType().GetId()).To(Equal("acme_1tib"))
 			Expect(computeNodeSet.GetSize()).To(BeNumerically("==", 3))
 			Expect(nodeSets).To(HaveKey("gpu"))
 			gpuNodeSet := nodeSets["gpu"]
-			Expect(gpuNodeSet.GetHostType().GetId()).To(Equal("acme_gpu"))
 			Expect(gpuNodeSet.GetSize()).To(BeNumerically("==", 1))
 		})
 
@@ -375,36 +429,7 @@ var _ = Describe("Clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			nodeSets := response.GetObject().GetSpec().GetNodeSets()
 			Expect(nodeSets).To(HaveLen(1))
-			Expect(nodeSets["junk"].GetHostType().GetId()).To(Equal("acme_1tib"))
 			Expect(nodeSets["junk"].GetSize()).To(Equal(int32(1000)))
-		})
-
-		It("Rejects node set with host type that isn't in the template", func() {
-			response, err := server.Create(ctx, publicv1.ClustersCreateRequest_builder{
-				Object: publicv1.Cluster_builder{
-					Metadata: publicv1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
-					Spec: publicv1.ClusterSpec_builder{
-						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
-						NodeSets: map[string]*publicv1.ClusterNodeSet{
-							"compute": publicv1.ClusterNodeSet_builder{
-								HostType: publicv1.HostTypeReference_builder{Id: "hal_9000"}.Build(),
-								Size:     proto.Int32(1000),
-							}.Build(),
-						},
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			Expect(response).To(BeNil())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(Equal(
-				"host type for node set 'compute' should be empty, 'test-host-type-1tib' or 'acme_1tib', like in " +
-					"template 'my_template', but it is 'hal_9000'",
-			))
 		})
 
 		It("Rejects node set with zero size", func() {
@@ -880,8 +905,7 @@ var _ = Describe("Clusters server", func() {
 					Spec: publicv1.ClusterSpec_builder{
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
-								Size:     proto.Int32(4),
+								Size: proto.Int32(4),
 							}.Build(),
 						},
 					}.Build(),
@@ -890,7 +914,6 @@ var _ = Describe("Clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			object = updateResponse.GetObject()
 			nodeSet := object.GetSpec().GetNodeSets()["compute"]
-			Expect(nodeSet.GetHostType().GetId()).To(Equal("acme_1tib"))
 			Expect(nodeSet.GetSize()).To(BeNumerically("==", 4))
 
 			// Get and verify:
@@ -900,7 +923,6 @@ var _ = Describe("Clusters server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			object = getResponse.GetObject()
 			nodeSet = object.GetSpec().GetNodeSets()["compute"]
-			Expect(nodeSet.GetHostType().GetId()).To(Equal("acme_1tib"))
 			Expect(nodeSet.GetSize()).To(BeNumerically("==", 4))
 		})
 
@@ -1018,8 +1040,7 @@ var _ = Describe("Clusters server", func() {
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
-									HostType: privatev1.HostTypeReference_builder{Id: "my_host_type"}.Build(),
-									Size:     proto.Int32(3),
+									Size: proto.Int32(3),
 								}.Build(),
 							},
 						}.Build(),
@@ -1042,8 +1063,7 @@ var _ = Describe("Clusters server", func() {
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								HostType: publicv1.HostTypeReference_builder{Id: "my_host_type"}.Build(),
-								Size:     proto.Int32(4),
+								Size: proto.Int32(4),
 							}.Build(),
 						},
 					}.Build(),
@@ -1218,8 +1238,7 @@ var _ = Describe("Clusters server", func() {
 					Spec: publicv1.ClusterSpec_builder{
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
-								Size:     proto.Int32(3),
+								Size: proto.Int32(3),
 							}.Build(),
 						},
 					}.Build(),

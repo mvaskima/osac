@@ -18,6 +18,9 @@ respective areas.
 - Deployment architecture: [`docs/helm-deployment-guide.md`](docs/helm-deployment-guide.md)
 - Script behavior: [`README.md`](README.md) and `scripts/`
 - Values and schema: `charts/osac/values.yaml` and `charts/osac/values.schema.json`
+- Changes to installer values or schema: read the
+  [Enclave Wizard pipeline](../docs/agent-context/enclave-wizard-pipeline.md)
+  and account for schema consumption by the Enclave plugin and UI.
 - Sibling component contracts: the relevant `../<component>/AGENTS.md`
 
 ## Invariants

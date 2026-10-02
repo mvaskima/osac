@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import subprocess
 import tempfile
 from typing import Any
 
@@ -79,6 +80,7 @@ class OsacCLI:
         run_strategy: str = "Always",
         user_data_secret_ref: str | None = None,
         instance_type: str | None = None,
+        ssh_key: str | None = None,
     ) -> str:
         args: list[str] = [
             "create",
@@ -167,11 +169,23 @@ class OsacCLI:
 
         if user_data_secret_ref is not None:
             args.extend(["--user-data", user_data_secret_ref])
+        if ssh_key is not None:
+            args.extend(["--ssh-key", ssh_key])
 
         return self._parse_uuid(self._run(*args))
 
     def delete_compute_instance(self, *, uuid: str) -> None:
         self._run("delete", "computeinstance", uuid)
+
+    def edit_compute_instance(self, *, uuid: str) -> subprocess.CompletedProcess[str]:
+        """Edit a ComputeInstance and retain stderr for warning assertions."""
+        return subprocess.run(
+            (self.binary, "--config", self._config_dir, "edit", "--output", "json", "computeinstance", uuid),
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=True,
+        )
 
     def create_instance_type(
         self,
@@ -239,11 +253,22 @@ class OsacCLI:
 
         return self._parse_uuid(self._run(*args))
 
-    def create_secret(self, *, name: str, from_files: dict[str, str]) -> None:
+    def create_secret(
+        self,
+        *,
+        name: str,
+        from_files: dict[str, str],
+        secret_type: str | None = None,
+    ) -> None:
         args: list[str] = ["create", "secret", "--name", name]
+        if secret_type is not None:
+            args.extend(["--type", secret_type])
         for key, path in from_files.items():
             args.extend(["--from-file", f"{key}={path}"])
         self._run(*args)
+
+    def delete_secret(self, *, name: str) -> None:
+        self._run("delete", "secret", name)
 
     def get(self, resource: str, *, output: str | None = None) -> str:
         args: list[str] = ["get", resource]
@@ -289,7 +314,7 @@ class OsacCLI:
         user_data: str | None = None,
         network_attachments: list[str] | None = None,
         external_ip_attachment: bool = False,
-    ) -> str:
+    ) -> tuple[str, list[str]]:
         args: list[str] = ["create", "baremetalinstance", "--name", name, "--catalog-item", catalog_item]
         if ssh_key is not None:
             args.extend(["--ssh-key", ssh_key])
@@ -301,7 +326,13 @@ class OsacCLI:
             args.extend(["--external-ip-attachment"])
         for na in network_attachments or []:
             args.extend(["--network-attachment", na])
-        return self._parse_uuid(self._run(*args))
+        result = subprocess.run(
+            [self.binary, "--config", self._config_dir, *args], capture_output=True, text=True, timeout=300, check=True
+        )
+        warnings = [
+            line.removeprefix("Warning: ") for line in result.stderr.splitlines() if line.startswith("Warning: ")
+        ]
+        return self._parse_uuid(result.stdout.strip()), warnings
 
     def describe_baremetal_instance(self, *, name: str) -> str:
         return self._run("describe", "baremetalinstance", name)

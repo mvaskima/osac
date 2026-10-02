@@ -47,11 +47,21 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-ope
 |---|---|---|
 | Pure helpers, validation, or state calculations | Unit | `make test` |
 | Controller reconciliation, finalizers, status, or CRD interactions | Envtest | `make test` |
-| Controller deployment, watches, RBAC, console proxy, networking, or Helm wiring | Component integration | Deploy current image/manifests, then `make integration-tests`; [installer alternative](../docs/INTEGRATION-TESTING.md#osac-operator) |
+| Controller deployment, watches (including optional TopoLVM watch), RBAC, console proxy, networking, or Helm wiring | Component integration | Deploy current image/manifests, then `make integration-tests`; [installer alternative](../docs/INTEGRATION-TESTING.md#osac-operator) |
 | AAP, dispatcher, provisioning-provider, KubeVirt, or fulfillment boundary | Qualifying Contract or E2E | Use a boundary-specific suite; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) when coverage is missing |
 | Generated CRDs or manifests | Envtest plus applicable Kind suite | `make manifests generate helm-crds check-helm-crds`, then the required test command |
 
 Envtest runs via `make test`; Kind tests require the current operator deployment.
+The LVMS envtest lifecycle cases exercise generated LogicalVolume names,
+persisted UID-safe resumes, terminating-resource replacement, and deletion
+through the public Volume reconciler for RWO and RWOP. They use a minimal
+TopoLVM CRD and simulated status; they also inject stale parent snapshots to
+verify authoritative reads preserve the recorded LogicalVolume identity.
+Status-conflict cases verify newer vendor context, deletion and replacement
+UIDs are not overwritten. These tests do not provision or mount real devices.
+The Kind suite's LVMS-disabled case verifies the Volume controller remains
+ready without the TopoLVM `LogicalVolume` CRD; it does not exercise LVMS
+provisioning or the CSI data path.
 
 ## Validation
 

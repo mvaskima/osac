@@ -138,6 +138,19 @@ const buildClusterFieldDefinitions = (catalogItem: unknown, t: TFunction) => {
         t('This field is required'),
       ),
     }),
+    specUseDefaultNetwork: yup.boolean(),
+    specNetworkAttachment: yup.object({
+      virtualNetwork: yup.object({ id: yup.string(), name: yup.string() }),
+      subnet: yup.object({
+        id: yup.string().test('subnet-required', t('Subnet is required'), function (value) {
+          const spec = this.from?.[2]?.value as { useDefaultNetwork?: boolean } | undefined;
+          return spec?.useDefaultNetwork !== false || Boolean(value?.trim());
+        }),
+        name: yup.string(),
+      }),
+      securityGroups: yup.array().of(yup.object({ id: yup.string(), name: yup.string() })),
+    }),
+    specAutoExternalIpAttachment: yup.boolean(),
   };
 };
 
@@ -180,6 +193,9 @@ export const buildClusterStepSchema = (
       return yup.object({
         spec: yup.object({
           network: fields.specNetwork,
+          useDefaultNetwork: fields.specUseDefaultNetwork,
+          networkAttachment: fields.specNetworkAttachment,
+          autoExternalIpAttachment: fields.specAutoExternalIpAttachment,
         }),
       });
     default:

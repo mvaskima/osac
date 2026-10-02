@@ -475,8 +475,7 @@ var _ = Describe("Tenancy logic", func() {
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"compute": publicv1.ClusterNodeSet_builder{
-							HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
-							Size:     proto.Int32(4),
+							Size: proto.Int32(4),
 						}.Build(),
 					},
 				}.Build(),
@@ -546,7 +545,7 @@ var _ = Describe("Tenancy logic", func() {
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
-		Expect(status.Message()).To(Equal("tenant 'your-tenant' doesn't exist"))
+		Expect(status.Message()).To(Equal("you are not authorized to use the specified tenant"))
 	})
 
 	It("Rejects object creation when tenant is visible to the user, but doesn't exist in the database", func() {

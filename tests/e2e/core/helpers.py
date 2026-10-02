@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ipaddress
+import os
 import re
 import subprocess
 import time
@@ -13,12 +15,40 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import poll_until, run_unchecked
 
 _POOL_READY_STATE = "EXTERNAL_IP_POOL_STATE_READY"
+_SUBNET_READY_STATE = "SUBNET_STATE_READY"
 _BMI_RUNNING_RETRIES = 180
 _BMI_RUNNING_DELAY = 10
 
 
 def unique_name(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex[:8]}"
+
+
+def allocate_worker_subnet(prefix: int = 24) -> ipaddress.IPv4Network:
+    """Allocate a non-overlapping subnet for the current pytest-xdist worker."""
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
+    worker_num = int(worker_id.removeprefix("gw")) if worker_id.startswith("gw") else 0
+
+    if not hasattr(allocate_worker_subnet, "_counters"):
+        allocate_worker_subnet._counters = {}
+
+    counter = allocate_worker_subnet._counters.get(prefix, 0)
+    allocate_worker_subnet._counters[prefix] = counter + 1
+
+    if prefix == 24:
+        if worker_num >= 4:
+            raise RuntimeError(f"Worker {worker_id} is outside the reserved /24 address space")
+        if counter >= 32:
+            raise RuntimeError(f"Worker {worker_id} exhausted /24 address space (counter={counter})")
+        return ipaddress.IPv4Network(f"172.27.{worker_num * 32 + counter}.0/24")
+
+    if prefix == 30:
+        third_octet = 128 + worker_num * 32 + (counter // 64)
+        if third_octet > 255:
+            raise RuntimeError(f"Worker {worker_id} exhausted /30 address space (counter={counter})")
+        return ipaddress.IPv4Network(f"172.27.{third_octet}.{(counter % 64) * 4}/30")
+
+    raise NotImplementedError(f"Prefix /{prefix} not supported")
 
 
 def grpc_error_message(exc: subprocess.CalledProcessError) -> str:
@@ -40,9 +70,7 @@ def assert_grpc_method_unavailable(
     exc = exc_info.value
     combined: str = (exc.stderr or "") + (exc.stdout or "")
     descriptor_error = f'service "{service}" does not include a method named "{method}"'
-    assert descriptor_error in combined, (
-        f"Expected {service}/{method} to be unavailable, got: {combined.strip()}"
-    )
+    assert descriptor_error in combined, f"Expected {service}/{method} to be unavailable, got: {combined.strip()}"
 
 
 def assert_grpc_field_violation(
@@ -86,6 +114,18 @@ def wait_for_running(*, k8s: K8sClient, name: str) -> None:
     )
 
 
+def wait_for_vmi_ip(*, k8s: K8sClient, vmi_namespace: str, compute_instance_name: str) -> str:
+    return poll_until(
+        fn=lambda: k8s.get_vmi_ip(
+            vmi_namespace=vmi_namespace, compute_instance_name=compute_instance_name, checked=False
+        ),
+        until=lambda v: v != "",
+        retries=60,
+        delay=5,
+        description=f"VMI IP for {compute_instance_name}",
+    )
+
+
 def wait_for_restart(*, k8s: K8sClient, name: str, initial: str, restart_ts: str) -> None:
     poll_until(
         fn=lambda: k8s.get_compute_instance_last_restarted_at(name=name),
@@ -93,6 +133,19 @@ def wait_for_restart(*, k8s: K8sClient, name: str, initial: str, restart_ts: str
         retries=30,
         delay=10,
         description=f"{name} lastRestartedAt update",
+    )
+
+
+def wait_for_new_vmi(*, k8s: K8sClient, vmi_namespace: str, compute_instance_name: str, initial_timestamp: str) -> str:
+    return poll_until(
+        fn=lambda: k8s.get_vmi_creation_timestamp(
+            vmi_namespace=vmi_namespace, compute_instance_name=compute_instance_name
+        ),
+        until=lambda timestamp: timestamp != "" and timestamp != initial_timestamp,
+        retries=60,
+        delay=5,
+        description=f"{compute_instance_name} VMI recreation",
+        retry_on_error=True,
     )
 
 
@@ -114,6 +167,16 @@ def wait_for_grpc_removal(*, grpc: GRPCClient, uuid: str) -> None:
         delay=2,
         description=f"{uuid} removed from gRPC list",
     )
+
+
+def delete_instance_type_if_present(*, grpc: GRPCClient, name: str) -> None:
+    """Delete a test InstanceType, tolerating cleanup after an earlier delete."""
+    try:
+        grpc.delete_instance_type(name=name)
+    except subprocess.CalledProcessError as exc:
+        output = ((exc.stdout or "") + (exc.stderr or "")).lower()
+        if "not found" not in output:
+            raise
 
 
 def wait_for_virtual_network_cr(*, k8s: K8sClient, uuid: str) -> str:
@@ -163,6 +226,31 @@ def wait_for_subnet_ready(*, k8s: K8sClient, name: str) -> None:
         retries=60,
         delay=5,
         description=f"{name} Subnet Ready",
+    )
+
+
+def wait_for_grpc_subnet_ready(*, grpc: GRPCClient, subnet_id: str) -> None:
+    """Poll the gRPC API until the subnet state is READY.
+
+    The K8s CR status may report Ready before the fulfillment-service database
+    has been updated by the controller feedback loop.  Polling via gRPC closes
+    this race so that subsequent resource creation referencing the subnet does
+    not hit FailedPrecondition.
+    """
+
+    def _state() -> str:
+        try:
+            subnet = grpc.get_subnet(subnet_id=subnet_id)
+        except subprocess.CalledProcessError:
+            return ""
+        return subnet.get("object", {}).get("status", {}).get("state", "")
+
+    poll_until(
+        fn=_state,
+        until=lambda v: v == _SUBNET_READY_STATE,
+        retries=30,
+        delay=2,
+        description=f"Subnet {subnet_id} gRPC READY",
     )
 
 

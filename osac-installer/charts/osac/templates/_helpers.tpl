@@ -71,6 +71,44 @@ identity changes across upgrades and reinstall attempts.
 {{- end -}}
 
 {{/*
+True when this release should create a Strimzi KafkaUser for the fulfillment
+service. That is only when the in-cluster Kafka named by kafka.clusterName is
+enabled. An external cluster requires kafka.enabled=false and is configured
+through service.kafka.connection.
+*/}}
+{{- define "osac.provisionFulfillmentKafkaUser" -}}
+{{- if and .Values.kafka.enabled .Values.service.enabled }}
+true
+{{- end }}
+{{- end }}
+
+{{/*
+Name of the Strimzi KafkaUser (and of the Secret it creates in the Kafka
+namespace) used by the fulfillment service.
+*/}}
+{{- define "osac.fulfillmentKafkaUserName" -}}
+fulfillment-service
+{{- end }}
+
+{{/*
+Name of the Secret in the release namespace that holds the fulfillment Kafka
+connection properties (brokers, user, and password).
+*/}}
+{{- define "osac.fulfillmentKafkaSecretName" -}}
+fulfillment-service-kafka
+{{- end }}
+
+{{/*
+Bootstrap servers for the in-cluster Kafka named by kafka.clusterName in
+kafka.clusterNamespace.
+*/}}
+{{- define "osac.fulfillmentKafkaBrokers" -}}
+{{- $ns := .Values.kafka.clusterNamespace | default "osac-kafka" }}
+{{- $name := .Values.kafka.clusterName | default "osac-kafka" }}
+{{- printf "%s-kafka-bootstrap.%s.svc:9093" $name $ns }}
+{{- end }}
+
+{{/*
 Wait-for-fulfillment init container.
 Uses .Values.cliImage for the container image.
 */}}
@@ -153,7 +191,8 @@ facade vs low-level surface mismatches).
 {{- $expert := .Values.global.expertOverrides | default dict -}}
 {{- $netris := $networking.netris | default dict -}}
 {{- $netrisEnabled := eq $networking.fabricManager "netris" -}}
-{{- $agentlessEnabled := eq $networking.k8sManager "k8s_only" -}}
+{{- $agentlessEnabled := or (eq $networking.k8sManager "k8s_only") (eq $networking.fabricManager "agentless_net") -}}
+{{- $agentlessStubEnabled := eq $networking.fabricManager "agentless_net" -}}
 {{- $netExpertAap := $expert.aap | default false -}}
 {{- $netExpertNetworkClass := $expert.networkClass | default false -}}
 {{- $netExpertNetworkManagers := $expert.networkManagers | default false -}}
@@ -243,14 +282,19 @@ facade vs low-level surface mismatches).
 {{- if ne $netSteps "agentless_net.steps" }}
   {{- fail (printf "NETWORK_CLASS=agentless_net requires NETWORK_STEPS_COLLECTION=agentless_net.steps (got %q)" $netSteps) }}
 {{- end }}
-{{- if ne $fabricManager "" }}
-  {{- fail "NETWORK_CLASS=agentless_net requires networkClass.fabricManager to be empty" }}
+{{- if and $agentlessStubEnabled (ne $fabricManager "agentless_net") }}
+  {{- fail "AgentlessNet stub requires NetworkClass fabricManager=agentless_net" }}
+{{- else if and (not $agentlessStubEnabled) (ne $fabricManager "") }}
+  {{- fail "agentless_net.steps with the k8s_only manager requires networkClass.fabricManager to be empty" }}
 {{- end }}
 {{- end }}
 {{- if and $networkClass.enabled $fabricManager -}}
 {{- $mgr := index $fabricManagers $fabricManager | default dict -}}
 {{- $mgrEnabled := $mgr.enabled | default false -}}
 {{- if and (not $netExpertNetworkManagers) $netrisEnabled (eq $fabricManager "netris") }}
+{{- $mgrEnabled = true -}}
+{{- end }}
+{{- if and (not $netExpertNetworkManagers) $agentlessStubEnabled (eq $fabricManager "agentless_net") }}
 {{- $mgrEnabled = true -}}
 {{- end }}
 {{- if not $mgrEnabled }}

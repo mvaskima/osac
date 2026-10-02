@@ -1,6 +1,6 @@
 # OSAC E2E tests
 
-Cross-component pytest suites for VMaaS, CaaS, BMaaS, catalog, storage, and
+Cross-component pytest suites for VMaaS, CaaS, BMaaS, storage, and
 resource-reference workflows.
 
 This test suite is part of the OSAC monorepo, not an isolated project. Its
@@ -15,6 +15,15 @@ effects, and follow the instructions for every affected component.
 - Avoid fixed sleeps; wait for observable resource conditions with bounded timeouts.
 - Tests clean up resources they create and never assume the caller's shared-cluster namespace or context.
 - Shared fixture changes require collecting all affected suites.
+
+## Touched-area map
+
+| Area | Required coverage | Location and command | Boundary and prerequisites |
+|---|---|---|---|
+| VMaaS ComputeInstance InstanceType resize, including CatalogItem-created instances | Regression E2E for CLI/API outcomes, applied ComputeInstance configuration, and VMI resources | `tests/e2e/vmaas/regression/test_compute_instance_instance_type.py`; from the repository root, run `uv run pytest tests/e2e/vmaas/regression/test_compute_instance_instance_type.py` | Uses the deployed VMaaS API and Kubernetes endpoints, VM kubeconfig, image, storage tier, subnet, and VM template. Restart-required behavior assumes the single-node VMaaS profile. |
+
+Multi-node live hot-plug resize remains outside this suite and is tracked by
+[OSAC-5335](https://redhat.atlassian.net/browse/OSAC-5335).
 
 ## Validation
 

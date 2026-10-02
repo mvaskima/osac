@@ -979,6 +979,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			osacv1alpha1.ConditionControlPlaneAvailable,
 			osacv1alpha1.ConditionClusterAvailable,
 			string(osacv1alpha1.ClusterOrderConditionClusterStorageReady),
+			string(osacv1alpha1.ClusterOrderConditionAddOnOperatorsReady),
 			osacv1alpha1.ConditionProgressing,
 			osacv1alpha1.ConditionDeleting,
 		}
@@ -1033,7 +1034,8 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 					Finalizers: []string{osacClusterOrderFeedbackFinalizer},
 				},
 				Spec: osacv1alpha1.ClusterOrderSpec{
-					TemplateID: "test_template",
+					TemplateID:     "test_template",
+					AddOnOperators: []string{"pending", "running", "installed", "failed", "not-started"},
 				},
 			}
 			Expect(k8sClient.Create(testCtx, clusterOrder)).To(Succeed())
@@ -1050,7 +1052,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 					Spec: &privatev1.ClusterSpec{
 						NodeSets: map[string]*privatev1.ClusterNodeSet{
 							"workers": {
-								HostType: privatev1.HostTypeReference_builder{Name: "m5.xlarge"}.Build(),
+								BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{Name: "m5.xlarge"}.Build(),
 							},
 						},
 					},
@@ -1058,6 +1060,18 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 				},
 			}
 			mockClient.updateResponse = &privatev1.ClustersUpdateResponse{}
+		})
+
+		AfterEach(func() {
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			err := k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)
+			if apierrors.IsNotFound(err) {
+				return
+			}
+			Expect(err).NotTo(HaveOccurred())
+			clusterOrder.Finalizers = nil
+			Expect(k8sClient.Update(testCtx, clusterOrder)).To(Succeed())
+			Expect(k8sClient.Delete(testCtx, clusterOrder)).To(Succeed())
 		})
 
 		It("should propagate node set sizes to fulfillment", func() {
@@ -1075,6 +1089,66 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 				}
 			}
 			Expect(hasNodeSetsPath).To(BeTrue())
+		})
+
+		It("should match node sets by HostType when BMIT is absent", func() {
+			mockClient.getResponse = &privatev1.ClustersGetResponse{
+				Object: &privatev1.Cluster{
+					Id: clusterID,
+					Spec: &privatev1.ClusterSpec{
+						NodeSets: map[string]*privatev1.ClusterNodeSet{
+							"workers": {
+								HostType: privatev1.HostTypeReference_builder{Name: "m5.xlarge"}.Build(),
+							},
+						},
+					},
+					Status: &privatev1.ClusterStatus{},
+				},
+			}
+			mockClient.updateResponse = &privatev1.ClustersUpdateResponse{}
+
+			request := reconcile.Request{NamespacedName: typeNamespacedName}
+			result, err := reconciler.Reconcile(testCtx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeTrue())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			Expect(mockClient.lastUpdate.GetStatus().GetNodeSets()["workers"].GetSize()).To(Equal(int32(3)))
+		})
+
+		It("should propagate add-on operator job states to fulfillment", func() {
+			clusterOrder := &osacv1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
+			now := time.Now().UTC()
+			clusterOrder.Status.AddOnOperatorJobs = []osacv1alpha1.AddOnOperatorJobStatus{
+				{Name: "pending", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(now), State: osacv1alpha1.JobStatePending}},
+				{Name: "running", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(now.Add(-time.Minute)), State: osacv1alpha1.JobStateFailed}},
+				{Name: "running", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(now), State: osacv1alpha1.JobStateRunning}},
+				{Name: "installed", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(now), State: osacv1alpha1.JobStateSucceeded}},
+				{Name: "failed", JobStatus: osacv1alpha1.JobStatus{Type: osacv1alpha1.JobTypeProvision, Timestamp: metav1.NewTime(now), State: osacv1alpha1.JobStateFailed, Message: "installation failed"}},
+			}
+			Expect(k8sClient.Status().Update(testCtx, clusterOrder)).To(Succeed())
+
+			result, err := reconciler.Reconcile(testCtx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IsZero()).To(BeTrue())
+			Expect(mockClient.updateCalled).To(BeTrue())
+			statuses := mockClient.lastUpdate.GetStatus().GetAddOnOperators()
+			Expect(statuses).To(HaveLen(5))
+			Expect(statuses[0].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING))
+			Expect(statuses[1].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING))
+			Expect(statuses[2].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLED))
+			Expect(statuses[3].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_FAILED))
+			Expect(statuses[3].GetMessage()).To(Equal("installation failed"))
+			Expect(statuses[4].GetName()).To(Equal("not-started"))
+			Expect(statuses[4].GetState()).To(Equal(privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_PENDING))
+
+			hasAddOnOperatorsPath := false
+			for _, path := range mockClient.lastUpdateMask.GetPaths() {
+				if path == "status.add_on_operators" {
+					hasAddOnOperatorsPath = true
+				}
+			}
+			Expect(hasAddOnOperatorsPath).To(BeTrue())
 		})
 	})
 })

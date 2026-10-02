@@ -48,6 +48,7 @@ WORKFLOWS=(
   "compute_instance_with_gpu_create"
   "compute_instance_delete"
   "cluster_status_reporting"
+  "addon_operator_install"
 )
 
 # Role-level integration tests.
@@ -58,15 +59,13 @@ ROLE_TESTS=(
   "config_as_code_pod_specs"
   "finalizer"
   "lease"
+  "agentless_net_stub"
 )
 
 ROLE_SCENARIO_TESTS=(
   "cluster_working_namespace:test_not_found"
   "cluster_working_namespace:test_predefined"
   "cluster_working_namespace:test_found"
-  "tenant_target_namespace:test_not_found"
-  "tenant_target_namespace:test_predefined"
-  "tenant_target_namespace:test_found"
 )
 
 echo "=== Running Workflow Integration Tests ==="

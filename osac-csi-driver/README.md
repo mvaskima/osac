@@ -38,7 +38,7 @@ make image-push   # Push container image
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--csi-endpoint` | `unix:///csi/osac/csi.sock` | CSI endpoint this driver listens on |
-| `--node-id` | (required) | Node ID for NodeGetInfo |
+| `--node-id` | (required) | Process startup node ID; NodeGetInfo uses `NODE_NAME` |
 | `--driver-name` | `csi.osac.openshift.io` | CSI driver name |
 | `--fulfillment-endpoint` | (empty, uses stub) | gRPC endpoint for the OSAC fulfillment service |
 | `--fulfillment-client-id` | (empty) | OAuth2 client ID for fulfillment-service authentication |
@@ -46,6 +46,15 @@ make image-push   # Push container image
 | `--fulfillment-issuer-url` | (empty) | Keycloak issuer URL for `client_credentials` token exchange |
 | `--grpc-insecure` | `false` | Skip TLS server certificate verification |
 | `--vendor-sockets` | (empty) | Comma-separated `backend=socketpath` pairs |
+
+The node DaemonSet supplies `NODE_NAME` from the Kubernetes downward API. The
+LVMS socket is routed through the existing vendor socket map and defaults to
+`/run/topolvm/csi-topolvm.sock`. An explicit `lvms` entry in `--vendor-sockets`
+replaces that default; `OSAC_LVMS_NODE_SOCKET` takes precedence over both.
+The chart leaves `node.lvmsNodeSocket` empty by default, so it preserves
+`node.vendorSockets`. Set `node.lvmsNodeSocket` to supply an explicit environment
+override. For custom paths, also align `node.lvmsNodeSocketDir` and
+`node.lvmsNodeSocketHostPath` so the socket is accessible inside the container.
 
 ## License
 

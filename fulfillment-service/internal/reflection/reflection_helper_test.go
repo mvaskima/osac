@@ -459,8 +459,7 @@ var _ = Describe("Reflection helper", func() {
 							Spec: publicv1.ClusterSpec_builder{
 								NodeSets: map[string]*publicv1.ClusterNodeSet{
 									"xyz": publicv1.ClusterNodeSet_builder{
-										HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
-										Size:     proto.Int32(3),
+										Size: proto.Int32(3),
 									}.Build(),
 								},
 							}.Build(),
@@ -472,8 +471,7 @@ var _ = Describe("Reflection helper", func() {
 							Spec: publicv1.ClusterSpec_builder{
 								NodeSets: map[string]*publicv1.ClusterNodeSet{
 									"xyz": publicv1.ClusterNodeSet_builder{
-										HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
-										Size:     proto.Int32(3),
+										Size: proto.Int32(3),
 									}.Build(),
 								},
 							}.Build(),
@@ -493,8 +491,7 @@ var _ = Describe("Reflection helper", func() {
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"xyz": publicv1.ClusterNodeSet_builder{
-							HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
-							Size:     proto.Int32(3),
+							Size: proto.Int32(3),
 						}.Build(),
 					},
 				}.Build(),
@@ -507,8 +504,7 @@ var _ = Describe("Reflection helper", func() {
 					Spec: publicv1.ClusterSpec_builder{
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"xyz": publicv1.ClusterNodeSet_builder{
-								HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
-								Size:     proto.Int32(3),
+								Size: proto.Int32(3),
 							}.Build(),
 						},
 					}.Build(),
@@ -541,8 +537,7 @@ var _ = Describe("Reflection helper", func() {
 							Spec: publicv1.ClusterSpec_builder{
 								NodeSets: map[string]*publicv1.ClusterNodeSet{
 									"xyz": publicv1.ClusterNodeSet_builder{
-										HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
-										Size:     proto.Int32(3),
+										Size: proto.Int32(3),
 									}.Build(),
 								},
 							}.Build(),
@@ -558,7 +553,7 @@ var _ = Describe("Reflection helper", func() {
 			// Use the helper to send the request, and verify the response:
 			objectHelper := helper.Lookup("cluster")
 			Expect(objectHelper).ToNot(BeNil())
-			object, err := objectHelper.Update(ctx, publicv1.Cluster_builder{
+			result, err := objectHelper.Update(ctx, publicv1.Cluster_builder{
 				Id: "123",
 				Spec: publicv1.ClusterSpec_builder{
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
@@ -569,15 +564,15 @@ var _ = Describe("Reflection helper", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+			Expect(result.Warnings).To(BeEmpty())
 			Expect(proto.Equal(
-				object,
+				result.Object,
 				publicv1.Cluster_builder{
 					Id: "123",
 					Spec: publicv1.ClusterSpec_builder{
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"xyz": publicv1.ClusterNodeSet_builder{
-								HostType: publicv1.HostTypeReference_builder{Id: "acme_1tib"}.Build(),
-								Size:     proto.Int32(3),
+								Size: proto.Int32(3),
 							}.Build(),
 						},
 					}.Build(),

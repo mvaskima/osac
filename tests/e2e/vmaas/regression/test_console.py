@@ -16,10 +16,10 @@ from typing import Any
 import pytest
 import websocket
 
-from tests.e2e.catalog.conftest import unique_name
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     assert_grpc_rejected,
+    unique_name,
     wait_for_cr,
     wait_for_deletion,
     wait_for_provision,
@@ -397,7 +397,7 @@ def test_console_expired_ticket_rejected(
 
     expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
     seconds_until_expiry: float = (expires_at - datetime.now(tz=UTC)).total_seconds()
-    wait_seconds: float = min(60.0, max(0.0, seconds_until_expiry) + 15.0)
+    wait_seconds: float = max(0.0, seconds_until_expiry) + 15.0
 
     logger.info("Ticket expires at %s, waiting %.0fs past expiry", expires_at_str, wait_seconds)
     time.sleep(wait_seconds)

@@ -32,19 +32,6 @@ const vmCatalogItem: ComputeInstanceCatalogItem = {
     name: 'tpl-rhel-9',
   }),
   published: true,
-  fieldDefinitions: [
-    {
-      $typeName: 'osac.public.v1.FieldDefinition',
-      path: 'spec.image.source_ref',
-      displayName: 'VM image',
-      editable: true,
-      validationSchema: '',
-      default: {
-        $typeName: 'google.protobuf.Value',
-        kind: { case: 'stringValue', value: 'quay.io/example/rhel9' },
-      },
-    },
-  ],
   templateParameters: {},
 };
 
@@ -52,7 +39,7 @@ const emptyValues: ComputeInstanceWizardValues = {
   catalogItemId: '',
   metadata: { name: '', project: '' },
   spec: {
-    sshPublicKey: '',
+    sshKey: { name: '' },
     instanceType: '',
     userData: '',
     bootDisk: { sizeGib: '', storageTier: emptyResourceSelectValue() },
@@ -130,6 +117,15 @@ describe('buildComputeInstanceStepSchema', () => {
   });
 
   it('accepts valid DNS label name on general step', async () => {
+    const errors = await validateStep('general', {
+      ...emptyValues,
+      catalogItemId: vmCatalogItem.id,
+      metadata: { name: 'my-vm', project: '' },
+    });
+    expect(errors).toEqual({});
+  });
+
+  it('does not require an SSH key on general step', async () => {
     const errors = await validateStep('general', {
       ...emptyValues,
       catalogItemId: vmCatalogItem.id,
@@ -391,32 +387,6 @@ describe('buildComputeInstanceStepSchema', () => {
       vmCatalogItem,
     );
     expect(errors).toEqual({});
-  });
-
-  it('requires ssh key on general step when defined in catalog field_definitions', async () => {
-    const catalogItem = {
-      ...vmCatalogItem,
-      fieldDefinitions: [
-        ...(vmCatalogItem.fieldDefinitions ?? []),
-        {
-          path: 'ssh_public_key',
-          displayName: 'SSH key',
-          editable: true,
-        },
-      ],
-    };
-    const errors = await validateStep(
-      'general',
-      {
-        ...emptyValues,
-        catalogItemId: vmCatalogItem.id,
-        metadata: { name: 'web-01', project: '' },
-      },
-      catalogItem,
-    );
-    expect(errors).toEqual({
-      spec: { sshPublicKey: 'catalogProvision.validation.required' },
-    });
   });
 
   it('returns undefined for review step', () => {

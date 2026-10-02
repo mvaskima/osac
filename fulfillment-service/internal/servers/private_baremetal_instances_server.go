@@ -33,7 +33,6 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -50,7 +49,6 @@ func validateBareMetalUserData(userData []byte) error {
 
 type PrivateBareMetalInstancesServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -63,7 +61,6 @@ var _ privatev1.BareMetalInstancesServer = (*PrivateBareMetalInstancesServer)(ni
 type PrivateBareMetalInstancesServer struct {
 	privatev1.UnimplementedBareMetalInstancesServer
 	logger                  *slog.Logger
-	notifier                events.Notifier
 	tenancyLogic            auth.TenancyLogic
 	generic                 *GenericServer[*privatev1.BareMetalInstance]
 	catalogItemsDao         *dao.GenericDAO[*privatev1.BareMetalInstanceCatalogItem]
@@ -89,11 +86,6 @@ func NewPrivateBareMetalInstancesServer() *PrivateBareMetalInstancesServerBuilde
 
 func (b *PrivateBareMetalInstancesServerBuilder) SetLogger(value *slog.Logger) *PrivateBareMetalInstancesServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateBareMetalInstancesServerBuilder) SetNotifier(value events.Notifier) *PrivateBareMetalInstancesServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -219,7 +211,6 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer)
-	addDAOEventCallback(externalIPPoolDaoBuilder, b.notifier)
 	externalIPPoolDao, err := externalIPPoolDaoBuilder.Build()
 	if err != nil {
 		return
@@ -229,7 +220,6 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer)
-	addDAOEventCallback(externalIPDaoBuilder, b.notifier)
 	externalIPDao, err := externalIPDaoBuilder.Build()
 	if err != nil {
 		return
@@ -239,7 +229,6 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer)
-	addDAOEventCallback(externalIPAttachmentDaoBuilder, b.notifier)
 	externalIPAttachmentDao, err := externalIPAttachmentDaoBuilder.Build()
 	if err != nil {
 		return
@@ -257,7 +246,6 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 	generic, err := NewGenericServer[*privatev1.BareMetalInstance]().
 		SetLogger(b.logger).
 		SetService(privatev1.BareMetalInstances_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -269,7 +257,6 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 
 	result = &PrivateBareMetalInstancesServer{
 		logger:                  b.logger,
-		notifier:                b.notifier,
 		tenancyLogic:            b.tenancyLogic,
 		generic:                 generic,
 		catalogItemsDao:         catalogItemsDao,
@@ -358,8 +345,12 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 	if err = s.validateNetworkAttachments(ctx, candidate); err != nil {
 		return
 	}
+	normalizeSoleBareMetalAttachmentPrimary(candidate.GetSpec().GetNetworkAttachments())
 	if ref := candidate.GetSpec().GetInstanceType(); ref != nil {
-		if _, err = resolveAndCanonicalizeReference(ctx, s.instanceTypesDao, candidate.GetMetadata(), ref, "bare metal instance type", grpccodes.InvalidArgument); err != nil {
+		if err = validatePlatformReference(ref, "bare metal instance type", " in spec.instance_type"); err != nil {
+			return
+		}
+		if _, err = resolveAndCanonicalizeReference(ctx, s.instanceTypesDao, candidate.GetMetadata(), ref, "bare metal instance type", grpccodes.NotFound); err != nil {
 			return
 		}
 	}
@@ -789,7 +780,7 @@ func (s *PrivateBareMetalInstancesServer) applyBareMetalTemplate(bmi *privatev1.
 }
 
 // validateBareMetalImmutability ensures template, catalog_item, disk_image, ssh_public_key, user_data, template_parameters,
-// and auto_external_ip_attachment cannot be changed after creation.
+// auto_external_ip_attachment, and network_attachments cannot be changed after creation.
 func validateBareMetalImmutability(
 	current, candidate *privatev1.BareMetalInstance,
 	mask *fieldmaskpb.FieldMask,
@@ -905,6 +896,13 @@ func compareNetworkAttachmentsImmutability(existing, updated []*privatev1.BareMe
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"cannot change network_attachments[%d].primary: primary is immutable after creation", i)
 		}
+		if err := validateImmutableSecurityGroups(
+			existing[i].GetSecurityGroups(),
+			updated[i].GetSecurityGroups(),
+			fmt.Sprintf("network_attachments[%d].security_groups", i),
+		); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -960,8 +958,11 @@ func validateBareMetalNetworkAttachmentStructure(source string, attachments []*p
 		prefix = fmt.Sprintf("field '%s': ", source)
 	}
 
-	// Structural validation: duplicates and multi-NIC interface requirement.
-	seenInterfaces := make(map[string]bool)
+	if len(attachments) > 1 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"%sat most one network attachment is supported", prefix)
+	}
+
 	for i, a := range attachments {
 		if a == nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "%snetwork_attachments[%d]: attachment cannot be null", prefix, i)
@@ -969,35 +970,19 @@ func validateBareMetalNetworkAttachmentStructure(source string, attachments []*p
 		if a.GetSubnet() == nil {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument, "%snetwork_attachments[%d]: subnet is required", prefix, i)
 		}
-		iface := a.GetInterface()
-		if len(attachments) > 1 && iface == "" {
+		if a.HasPrimary() && !a.GetPrimary() {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%snetwork_attachments[%d]: interface is required when multiple attachments are specified", prefix, i)
-		}
-		if iface == "" {
-			continue
-		}
-		if seenInterfaces[iface] {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%snetwork_attachments[%d]: duplicate interface '%s'", prefix, i, iface)
-		}
-		seenInterfaces[iface] = true
-	}
-
-	// Primary selection for multiple attachments.
-	if len(attachments) > 1 {
-		primaryCount := 0
-		for _, a := range attachments {
-			if a.GetPrimary() {
-				primaryCount++
-			}
-		}
-		if primaryCount != 1 {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%swhen multiple network attachments are specified, exactly one must have primary set to true", prefix)
+				"%snetwork_attachments[%d]: primary: false is not supported; omit primary or set primary: true", prefix, i)
 		}
 	}
 	return nil
+}
+
+func normalizeSoleBareMetalAttachmentPrimary(attachments []*privatev1.BareMetalNetworkAttachment) {
+	if len(attachments) != 1 || attachments[0] == nil {
+		return
+	}
+	attachments[0].SetPrimary(true)
 }
 
 func validateBareMetalAttachmentsForHostType(source string, attachments []*privatev1.BareMetalNetworkAttachment, hostType *privatev1.HostType) error {

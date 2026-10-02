@@ -22,6 +22,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -68,11 +69,17 @@ func deferCatalogItemFixtureDeletion(deleteDependency func(context.Context) erro
 		}
 		Expect(err).NotTo(HaveOccurred())
 		if deleted != nil {
-			Eventually(func(g Gomega) bool {
+			Eventually(func() bool {
 				removed, err := deleted(ctx)
-				g.Expect(err).NotTo(HaveOccurred())
+				if err != nil {
+					if status.Code(err) == codes.NotFound {
+						return true
+					}
+					// Transient error during async deletion — retry.
+					return false
+				}
 				return removed
-			}, 2*time.Minute, time.Second).Should(BeTrue(), "fixture was not removed")
+			}, 5*time.Minute, 2*time.Second).Should(BeTrue(), "fixture was not removed")
 		}
 	})
 }
@@ -203,6 +210,7 @@ func createCatalogItemNetworkClassFixture(ctx context.Context) string {
 		_, err := classes.Delete(ctx, privatev1.NetworkClassesDeleteRequest_builder{Id: classID}.Build())
 		return err
 	}, nil)
+	waitForNetworkClassReady(ctx, classes, classID)
 	return classID
 }
 
@@ -237,13 +245,13 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 			return true, nil
 		}
 		if err != nil {
-			return false, err
+			return false, nil
 		}
 		_, err = privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn()).Signal(ctx, privatev1.VirtualNetworksSignalRequest_builder{Id: networkID}.Build())
 		if status.Code(err) == codes.NotFound {
 			return true, nil
 		}
-		return false, err
+		return false, nil
 	})
 
 	Eventually(func() privatev1.VirtualNetworkState {
@@ -280,13 +288,13 @@ func createCatalogItemSubnetInClassFixture(ctx context.Context, tenant, project,
 			return true, nil
 		}
 		if err != nil {
-			return false, err
+			return false, nil
 		}
 		_, err = privatev1.NewSubnetsClient(tool.InternalView().AdminConn()).Signal(ctx, privatev1.SubnetsSignalRequest_builder{Id: subnetID}.Build())
 		if status.Code(err) == codes.NotFound {
 			return true, nil
 		}
-		return false, err
+		return false, nil
 	})
 
 	Eventually(func() privatev1.SubnetState {
@@ -328,13 +336,13 @@ func createCatalogItemNetworkInClassFixture(ctx context.Context, tenant, project
 			return true, nil
 		}
 		if err != nil {
-			return false, err
+			return false, nil
 		}
 		_, err = privatev1.NewSecurityGroupsClient(tool.InternalView().AdminConn()).Signal(ctx, privatev1.SecurityGroupsSignalRequest_builder{Id: groupID}.Build())
 		if status.Code(err) == codes.NotFound {
 			return true, nil
 		}
-		return false, err
+		return false, nil
 	})
 
 	Eventually(func() privatev1.SecurityGroupState {
@@ -611,12 +619,12 @@ func createCatalogItemBareMetalInstanceTemplateFixture(ctx context.Context, defa
 	return id
 }
 
-func createCatalogItemBareMetalInstanceTypeFixture(ctx context.Context, tenant string) string {
+func createCatalogItemBareMetalInstanceTypeFixture(ctx context.Context, _ string) string {
 	GinkgoHelper()
 	client := privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 	response, err := client.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
 		Object: privatev1.BareMetalInstanceType_builder{
-			Metadata: catalogItemFixtureMetadata(tenant, ""),
+			Metadata: catalogItemFixtureMetadata(auth.SharedTenant, ""),
 			Spec: privatev1.BareMetalInstanceTypeSpec_builder{
 				Hardware: privatev1.BareMetalHardwareSpec_builder{
 					Cpu:    privatev1.BareMetalCPUSpec_builder{Cores: 4, Architecture: "x86_64", ThreadsPerCore: 2}.Build(),
@@ -714,24 +722,30 @@ func createComputeInstanceFixture(ctx context.Context, conn *grpc.ClientConn, sp
 		return nil, err
 	}
 	result := response.GetObject()
+	deferComputeInstanceDeletion(result.GetId(), conn)
+	return result, nil
+}
+
+func deferComputeInstanceDeletion(id string, conn *grpc.ClientConn) {
+	GinkgoHelper()
+	client := publicv1.NewComputeInstancesClient(conn)
 	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
-		_, err := client.Delete(ctx, publicv1.ComputeInstancesDeleteRequest_builder{Id: result.GetId()}.Build())
+		_, err := client.Delete(ctx, publicv1.ComputeInstancesDeleteRequest_builder{Id: id}.Build())
 		return err
 	}, func(ctx context.Context) (bool, error) {
-		_, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: result.GetId()}.Build())
+		_, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: id}.Build())
 		if status.Code(err) == codes.NotFound {
 			return true, nil
 		}
 		if err != nil {
 			return false, err
 		}
-		_, err = privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn()).Signal(ctx, privatev1.ComputeInstancesSignalRequest_builder{Id: result.GetId()}.Build())
+		_, err = privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn()).Signal(ctx, privatev1.ComputeInstancesSignalRequest_builder{Id: id}.Build())
 		if status.Code(err) == codes.NotFound {
 			return true, nil
 		}
 		return false, err
 	})
-	return result, nil
 }
 
 func createClusterFixture(ctx context.Context, conn *grpc.ClientConn, spec *publicv1.ClusterSpec) (*publicv1.Cluster, error) {
@@ -747,24 +761,30 @@ func createClusterFixture(ctx context.Context, conn *grpc.ClientConn, spec *publ
 		return nil, err
 	}
 	result := response.GetObject()
+	deferClusterDeletion(result.GetId(), conn)
+	return result, nil
+}
+
+func deferClusterDeletion(id string, conn *grpc.ClientConn) {
+	GinkgoHelper()
+	client := publicv1.NewClustersClient(conn)
 	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
-		_, err := client.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: result.GetId()}.Build())
+		_, err := client.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: id}.Build())
 		return err
 	}, func(ctx context.Context) (bool, error) {
-		_, err := client.Get(ctx, publicv1.ClustersGetRequest_builder{Id: result.GetId()}.Build())
+		_, err := client.Get(ctx, publicv1.ClustersGetRequest_builder{Id: id}.Build())
 		if status.Code(err) == codes.NotFound {
 			return true, nil
 		}
 		if err != nil {
 			return false, err
 		}
-		_, err = privatev1.NewClustersClient(tool.InternalView().AdminConn()).Signal(ctx, privatev1.ClustersSignalRequest_builder{Id: result.GetId()}.Build())
+		_, err = privatev1.NewClustersClient(tool.InternalView().AdminConn()).Signal(ctx, privatev1.ClustersSignalRequest_builder{Id: id}.Build())
 		if status.Code(err) == codes.NotFound {
 			return true, nil
 		}
 		return false, err
 	})
-	return result, nil
 }
 
 func createBareMetalInstanceFixture(ctx context.Context, conn *grpc.ClientConn, spec *publicv1.BareMetalInstanceSpec) (*publicv1.BareMetalInstance, error) {

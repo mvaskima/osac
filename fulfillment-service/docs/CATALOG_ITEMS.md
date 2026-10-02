@@ -250,6 +250,11 @@ subnet/security-group attachments, and Bare Metal instance types.
 A shared catalog cannot lock or default local references. Use `editable: {}` to let each tenant
 supply its own value. StorageTier references use the platform scope.
 
+For ComputeInstance catalog items, `ssh_key` is an optional reference to an SSH public key Secret.
+A shared item can leave it editable with no default so each tenant can supply its own key. A
+tenant-scoped item can default or lock a key from its own scope. Omitting the key is valid; it only
+means SSH public-key access is not configured by the catalog item.
+
 ## Field Policies
 
 Each policy selects exactly one behavior. Reference policies carry typed reference objects, as
@@ -292,7 +297,7 @@ fields; in YAML, write them as nested mappings.
 
 | Field | Description |
 |-------|-------------|
-| `ssh_public_key` | SSH public key |
+| `ssh_key` | Optional reference to an SSH public key Secret |
 | `instance_type` | InstanceType reference defining CPU cores, memory, and optional GPUs |
 | `run_strategy` | VM run strategy (`COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS`, `COMPUTE_INSTANCE_RUN_STRATEGY_HALTED`) |
 | `user_data` | Cloud-init or ignition user data |
@@ -314,6 +319,27 @@ fields; in YAML, write them as nested mappings.
 | `run_strategy` | Bare metal run strategy |
 | `network_attachments` | Policy for the complete list of network attachments |
 | `auto_external_ip_attachment` | Whether to provision an external IP attachment automatically |
+
+#### BareMetalInstance DiskImage policy validation
+
+The current API names the policy container `fields` (the older
+`field_definitions` name is not accepted). `fields.disk_image` takes a typed
+`DiskImageReference` in either `locked` or `editable.default_value`. The
+catalog service resolves and canonicalizes that reference when the CatalogItem
+is created or when its `fields` are updated.
+
+At BareMetalInstance creation, a locked value is applied, or an editable
+default is applied when the caller omitted `spec.disk_image`, before normal BMI
+DiskImage validation. A caller-provided value overrides an editable default.
+
+The referenced DiskImage must belong to the CatalogItem's tenant or the shared
+tenant. A cross-tenant reference is rejected with `InvalidArgument` when it
+resolves; a reference that cannot be resolved returns `NotFound`. An `OBSOLETE`
+image is rejected. A `DEPRECATED` image is accepted but emits a warning from
+the gRPC CatalogItem Create response or an Update that revalidates the policy,
+including one that changes `fields` or publishes the CatalogItem. REST Create
+and Update responses return only the CatalogItem object, so they do not include
+those warnings.
 
 ### List and node-set policies
 
@@ -415,7 +441,7 @@ osac create computeinstance --catalog-item <standard-vm-id> \
 For the cluster example, supply a pull secret and SSH key and optionally override the pod CIDR:
 
 ```bash
-osac create secret --name cluster-pull-secret \
+osac create secret --name cluster-pull-secret --type=pull-secret \
   --from-file=.dockerconfigjson=pull-secret.json
 
 osac create cluster --catalog-item sandbox \
@@ -456,7 +482,7 @@ Platform administrators can create a Vault-backed pull Secret in the `shared` te
 it from a shared cluster template:
 
 ```bash
-osac --tenant shared create secret --name shared-pull-secret \
+osac --tenant shared create secret --name shared-pull-secret --type=pull-secret \
   --from-file=.dockerconfigjson=pull-secret.json
 ```
 

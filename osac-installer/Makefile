@@ -5,14 +5,13 @@
 #
 # Usage:
 # Every deployment target requires PLATFORM, PROFILE, and NS. No exceptions.
-#   make install         PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
-#   make uninstall       PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
-#   make install-infra   PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
-#   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
-#   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
-#   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac
-#   make kind-load-images  PLATFORM=kind PROFILE=dev-full NS=osac
-#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci  NS=osac  SUITE=all|fulfillment|operator|bmf
+#   make install         PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make uninstall       PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make install-infra   PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac
+#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test  NS=osac  SUITE=all|fulfillment|operator|bmf
 #
 # PROFILE=dev-full (kind only) is a superset of dev: it runs the same chart-based
 # control plane, then layers on the full local dev stack (KubeVirt/CDI/Multus, AWX,
@@ -31,6 +30,11 @@ SHELL := /usr/bin/env bash -o pipefail
 EXTRA_HELM_ARGS ?=
 FULFILLMENT_GINKGO_ARGS ?=
 
+# Work around HTTP/2 stream resets from proxy.golang.org during container
+# builds (see osac-test-infra#543).  Override with `make test GODEBUG=` to
+# disable, or set a different value to experiment.
+GODEBUG ?= http2client=0
+
 # -- Fail-fast parameter validation ------------------------------------
 # Guards fire at parse time, gated by MAKECMDGOALS so `make help` works.
 
@@ -44,10 +48,10 @@ ifeq ($(filter $(PLATFORM),kind openshift),)
 $(error PLATFORM=$(PLATFORM) is invalid; must be kind or openshift)
 endif
 ifndef PROFILE
-$(error PROFILE is required (dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci))
+$(error PROFILE is required (dev|dev-full|vmaas-ci|bmaas-ci|caas-ci|full-ci|cudn-evpn-netris-test))
 endif
-ifeq ($(filter $(PROFILE),dev dev-full vmaas-ci bmaas-ci caas-ci full-ci),)
-$(error PROFILE=$(PROFILE) is invalid; must be dev, dev-full, vmaas-ci, bmaas-ci, caas-ci, or full-ci)
+ifeq ($(filter $(PROFILE),dev dev-full vmaas-ci bmaas-ci caas-ci full-ci cudn-evpn-netris-test),)
+$(error PROFILE=$(PROFILE) is invalid; must be dev, dev-full, vmaas-ci, bmaas-ci, caas-ci, full-ci, or cudn-evpn-netris-test)
 endif
 ifndef NS
 $(error NS is required (namespace for OSAC instance, e.g. NS=osac))
@@ -353,25 +357,31 @@ ifeq ($(SUITE),all)
 	$(MAKE) test SUITE=bmf
 endif
 ifeq ($(SUITE),fulfillment)
-	$(call kind-container-build,-t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
 	$(call kind-load-image,localhost/fulfillment-service:it)
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
+	$(call kind-load-image,localhost/osac-operator:it)
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set service.images.service=localhost/fulfillment-service:it --set operator.enabled=false --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false"
+		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set operator.enabled=false --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false"
 	@for f in ../fulfillment-service/it/crds/*.yaml; do kubectl apply --server-side --field-manager=helm --force-conflicts -f "$$f"; done
-	cd ../fulfillment-service && ginkgo run --timeout 1h -v $(FULFILLMENT_GINKGO_ARGS) it
+# OSAC-5154's manager-discovery flow needs the operator, so keep it isolated from the service-only suite.
+	cd ../fulfillment-service && ginkgo run --timeout 1h -v --skip 'NetworkClass manager capability discovery' $(FULFILLMENT_GINKGO_ARGS) it
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set service.images.service=localhost/fulfillment-service:it --set global.services.bmaas.enabled=false --set operator.enabled=false --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false"
+		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false"
+	cd ../fulfillment-service && ginkgo run --timeout 1h -v --focus 'NetworkClass manager capability discovery' it
+	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
+		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set global.services.bmaas.enabled=false --set operator.enabled=false --set operator.networkManagers.enabled=true --set global.networking.networkClass.enabled=false"
 	cd ../fulfillment-service && IT_TEST_SUITE=bmaas-disabled ginkgo run --timeout 1h -v --focus 'Service enablement' it
 endif
 ifeq ($(SUITE),operator)
-	$(call kind-container-build,-t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
 	$(call kind-load-image,localhost/osac-operator:it)
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.networking.networkClass.enabled=false"
 	cd ../osac-operator && ginkgo run --timeout 30m -v test/integration
 endif
 ifeq ($(SUITE),bmf)
-	$(call kind-container-build,-t localhost/bmf-operator:it -f ../bare-metal-fulfillment-operator/Containerfile ..)
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/bmf-operator:it -f ../bare-metal-fulfillment-operator/Containerfile ..)
 	$(call kind-load-image,localhost/bmf-operator:it)
 	kubectl apply --server-side --force-conflicts -f ../bare-metal-fulfillment-operator/test/crds/
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
@@ -389,20 +399,132 @@ helm-deps: ## Build Helm chart dependencies
 	helm dependency build $(OSAC_CHART)
 
 .PHONY: helm-lint
-helm-lint: ## Lint all charts
+helm-lint: helm-deps ## Lint all charts
 	helm lint $(DEPS_CHART)
 	helm lint $(INFRA_CHART)
-	helm dependency build $(OSAC_CHART)
-	helm lint $(OSAC_CHART)
+	helm lint $(OSAC_CHART) --values $(OSAC_CHART)/ci/default-values.yaml
 
 .PHONY: helm-template
 helm-template: ## Dry-run render all templates
 	helm template osac-deps $(DEPS_CHART)
 	helm template osac-infra $(INFRA_CHART)
-	helm template osac $(OSAC_CHART)
+	helm template osac $(OSAC_CHART) --values $(OSAC_CHART)/ci/default-values.yaml
+
+.PHONY: csi-render-test
+csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
+	@set -euo pipefail; \
+		caas_render="$$(mktemp)"; \
+		vmaas_render="$$(mktemp)"; \
+		default_operator_render="$$(mktemp)"; \
+		csi_render="$$(mktemp)"; \
+		full_render="$$(mktemp)"; \
+		custom_render="$$(mktemp)"; \
+		node_render="$$(mktemp)"; \
+		infra_render="$$(mktemp)"; \
+		infra_enabled_render="$$(mktemp)"; \
+		error_render="$$(mktemp)"; \
+		trap 'rm -f "$$caas_render" "$$vmaas_render" "$$default_operator_render" "$$csi_render" "$$full_render" "$$custom_render" "$$node_render" "$$infra_render" "$$infra_enabled_render" "$$error_render"' EXIT; \
+		assert_helm_failure() { \
+			expected="$$1"; shift; \
+			if "$$@" >/dev/null 2>"$$error_render"; then \
+				printf 'Helm unexpectedly accepted invalid values; expected error: %s\n' "$$expected" >&2; \
+				exit 1; \
+			fi; \
+			if ! rg -Fq "$$expected" "$$error_render"; then \
+				printf 'Helm failed without the expected error: %s\n' "$$expected" >&2; \
+				cat "$$error_render" >&2; \
+				exit 1; \
+			fi; \
+		}; \
+		helm template osac $(OSAC_CHART) \
+			--values values/caas-ci/instance.yaml \
+			--set operator.networkManagers.enabled=true \
+			--set service.externalHostname=fulfillment-api.example.com \
+			--set service.internalHostname=fulfillment-internal-api.example.com \
+			--set global.clusterDomain=example.com > "$$caas_render"; \
+		! rg -q '^  OSAC_FULFILLMENT_ENDPOINT:' "$$caas_render"; \
+		helm template osac $(OSAC_CHART) \
+			--values values/vmaas-ci/instance.yaml \
+			--set operator.networkManagers.enabled=true \
+			--set service.externalHostname=fulfillment-api.example.com \
+			--set service.internalHostname=fulfillment-internal-api.example.com \
+			--set global.clusterDomain=example.com > "$$vmaas_render"; \
+		rg -Uq 'name: OSAC_VENDOR_CONTROLLERS\n[[:blank:]]+value: "lvms=none"' "$$vmaas_render"; \
+		helm template osac $(OSAC_CHART) \
+			--values $(OSAC_CHART)/ci/default-values.yaml > "$$default_operator_render"; \
+		! rg -q 'name: OSAC_VENDOR_CONTROLLERS' "$$default_operator_render"; \
+		assert_helm_failure "at '/operator/vendorControllers/lvms'" \
+			helm template osac $(OSAC_CHART) \
+			--values $(OSAC_CHART)/ci/default-values.yaml \
+			--set-string operator.vendorControllers.lvms=; \
+		assert_helm_failure "at '/operator/vendorControllers/lvms'" \
+			helm template osac $(OSAC_CHART) \
+			--values $(OSAC_CHART)/ci/default-values.yaml \
+			--set operator.vendorControllers.lvms=42; \
+		helm template osac $(OSAC_CHART) \
+			--values charts/osac/ci/default-values.yaml \
+			--set operator.enabled=false \
+			--set operator.networkManagers.enabled=true \
+			--set csiDriver.enabled=true \
+			--set csiDriver.controller.fulfillment.credentials.secretName=osac-csi-driver-credentials \
+			--set csiDriver.controller.fulfillment.allowStub=false > "$$csi_render"; \
+		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$csi_render")" -eq 1; \
+		rg -q 'namespace: osac-csi' "$$csi_render"; \
+		rg -q '^immutable: true$$' "$$csi_render"; \
+		helm template osac $(OSAC_CHART) \
+			--values charts/osac/ci/full-values.yaml \
+			--set operator.networkManagers.enabled=true > "$$full_render"; \
+		test "$$(rg -c '^  OSAC_FULFILLMENT_ENDPOINT:' "$$full_render")" -eq 2; \
+		helm template osac $(OSAC_CHART) \
+			--values charts/osac/ci/full-values.yaml \
+			--set operator.networkManagers.enabled=true \
+			--set csiDriver.controller.fulfillment.configMap.endpointKey=CUSTOM_FULFILLMENT_ENDPOINT \
+			--set csiDriver.controller.fulfillment.configMap.issuerUrlKey=CUSTOM_FULFILLMENT_ISSUER_URL > "$$custom_render"; \
+		rg -q '^  CUSTOM_FULFILLMENT_ENDPOINT:' "$$custom_render"; \
+		rg -q '^  CUSTOM_FULFILLMENT_ISSUER_URL:' "$$custom_render"; \
+		rg -q 'key: CUSTOM_FULFILLMENT_ENDPOINT' "$$custom_render"; \
+		rg -q 'key: CUSTOM_FULFILLMENT_ISSUER_URL' "$$custom_render"; \
+		helm template csi-driver ../osac-csi-driver/charts/csi-driver \
+			--show-only templates/node-daemonset.yaml \
+			--set namespace=osac-csi \
+			--set controller.fulfillment.configMap.name=osac-csi-fulfillment-config \
+			--set controller.fulfillment.credentials.secretName=osac-csi-driver-credentials \
+			--set controller.fulfillment.allowStub=false > "$$node_render"; \
+		rg -Fq -- '--fulfillment-endpoint=$$(OSAC_FULFILLMENT_ENDPOINT)' "$$node_render"; \
+		rg -Fq -- '--fulfillment-issuer-url=$$(OSAC_FULFILLMENT_ISSUER_URL)' "$$node_render"; \
+		rg -Fq -- '--fulfillment-client-id=$$(FULFILLMENT_CLIENT_ID)' "$$node_render"; \
+		rg -q 'name: osac-csi-fulfillment-config' "$$node_render"; \
+		rg -q 'secretName: osac-csi-driver-credentials' "$$node_render"; \
+		helm template osac-infra $(INFRA_CHART) \
+			--values values/caas-ci/infra.yaml > "$$infra_render"; \
+		! rg -q 'name: osac-infra-create-csi-creds' "$$infra_render"; \
+		helm template osac-infra $(INFRA_CHART) \
+			--values values/caas-ci/infra.yaml \
+			--set csiDriver.enabled=true > "$$infra_enabled_render"; \
+		rg -q 'name: osac-infra-create-csi-creds' "$$infra_enabled_render"; \
+		assert_helm_failure "at '/csiDriver/namespace': value must be 'osac-csi'" \
+			helm template osac $(OSAC_CHART) \
+			--values charts/osac/ci/full-values.yaml \
+			--set operator.networkManagers.enabled=true \
+			--set csiDriver.namespace=not-osac-csi; \
+		assert_helm_failure 'csiNamespace must be osac-csi when csiDriver.enabled is true' \
+			helm template osac-infra $(INFRA_CHART) \
+			--values values/caas-ci/infra.yaml \
+			--set csiDriver.enabled=true \
+			--set csiNamespace=not-osac-csi; \
+		assert_helm_failure 'operator and CSI ConfigMaps must use different names when they share a namespace' \
+			helm template osac $(OSAC_CHART) \
+			--values charts/osac/ci/full-values.yaml \
+			--set operator.networkManagers.enabled=true \
+			--namespace osac-csi \
+			--set csiDriver.controller.fulfillment.configMap.name=osac-fulfillment-config; \
+		assert_helm_failure "value must be one of '', 'osac-csi'" \
+			helm template csi-driver ../osac-csi-driver/charts/csi-driver \
+			--set namespace=not-osac-csi; \
+		echo 'CSI render checks passed.'
 
 .PHONY: helm-validate
-helm-validate: helm-lint helm-networking-test ## Validate all charts (lint + template)
+helm-validate: helm-lint csi-render-test helm-networking-test ## Validate all charts (lint + template)
 	@for d in values/*/; do \
 		infra="$${d}infra.yaml"; \
 		[ -f "$$infra" ] && echo "Validating $$infra..." && \

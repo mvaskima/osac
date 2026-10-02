@@ -243,6 +243,7 @@ allow if {
     "/osac.public.v1.HostTypes/List",
     "/osac.public.v1.InstanceTypes/Get",
     "/osac.public.v1.InstanceTypes/List",
+    "/osac.public.v1.SelfSubjectAccessReviews/Create",
     "/osac.public.v1.StorageTiers/Get",
     "/osac.public.v1.StorageTiers/List",
     "/osac.public.v1.Subnets/Create",

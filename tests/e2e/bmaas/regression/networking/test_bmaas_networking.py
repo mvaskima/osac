@@ -23,6 +23,7 @@ from tests.e2e.core.helpers import (
     wait_for_external_ip_pool_deletion,
     wait_for_external_ip_pool_grpc_ready,
     wait_for_external_ip_pool_ready,
+    wait_for_grpc_subnet_ready,
     wait_for_security_group_cr,
     wait_for_security_group_deletion,
     wait_for_security_group_ready,
@@ -91,6 +92,7 @@ class TestBmaasNetworking:
         )
         subnet_a_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_a_id)
         wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_a_cr)
+        wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=subnet_a_id)
 
         subnet_b_name = f"sub-b-{net_test_run_id}"
         subnet_b_id = grpc.create_subnet(
@@ -98,6 +100,7 @@ class TestBmaasNetworking:
         )
         subnet_b_cr = wait_for_subnet_cr(k8s=k8s_hub_client, uuid=subnet_b_id)
         wait_for_subnet_ready(k8s=k8s_hub_client, name=subnet_b_cr)
+        wait_for_grpc_subnet_ready(grpc=grpc, subnet_id=subnet_b_id)
 
         self.__class__.state.update(
             subnet_a_id=subnet_a_id, subnet_a_cr=subnet_a_cr, subnet_b_id=subnet_b_id, subnet_b_cr=subnet_b_cr
@@ -186,7 +189,7 @@ class TestBmaasNetworking:
             bmi_name = f"{name_suffix}-{net_test_run_id}"
             is_auto_eip = i == 2
             catalog = auto_eip_catalog_item_name if is_auto_eip else catalog_item_name
-            bmi_id = cli.create_baremetal_instance(
+            bmi_id, _ = cli.create_baremetal_instance(
                 name=bmi_name,
                 catalog_item=catalog,
                 ssh_key=net_ssh_public_key,
@@ -322,6 +325,7 @@ class TestBmaasNetworking:
         bmi1 = self.state["bmi1"]
         bmi3 = self.state["bmi3"]
 
+        # The probe helper requires a completion marker from the same SSH command.
         assert not bmi_ssh.arping(bmi1["ssh_host"], bmi3["ip"]), (
             f"arping from BMI1 ({bmi1['ip']}, subnet A) to BMI3 ({bmi3['ip']}, subnet B) "
             f"succeeded unexpectedly — different subnets should be different broadcast domains"
@@ -331,6 +335,7 @@ class TestBmaasNetworking:
         _require(self.state, "bmi1")
         bmi1 = self.state["bmi1"]
 
+        # The probe helper requires a completion marker from the same SSH command.
         assert not bmi_ssh.ping(bmi1["ssh_host"], mgmt_cluster_ip), (
             f"ping from BMI1 ({bmi1['ip']}) to management cluster ({mgmt_cluster_ip}) "
             f"succeeded unexpectedly — tenant isolation should prevent cross-VNet traffic"
@@ -383,7 +388,7 @@ class TestBmaasNetworking:
         def _try_ssh_eip() -> str:
             try:
                 return bmi_ssh.ssh_via_external_ip(ext_addr, timeout=10)
-            except subprocess.CalledProcessError:
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 return ""
 
         poll_until(

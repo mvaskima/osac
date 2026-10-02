@@ -104,7 +104,7 @@ func newClusterOrderFeedbackBridge(hubClient clnt.Client, clustersClient private
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
 					"status.conditions", feedbackStatusStatePath, "status.api_url", "status.console_url", "status.api_endpoint",
 					"status.ingress_endpoint", feedbackStatusStateTransitionTimePath, "status.kubeconfig_secret", "status.password_secret", "status.hub",
-					"status.node_sets",
+					"status.node_sets", "status.add_on_operators",
 				}},
 			}.Build())
 			return err
@@ -130,6 +130,7 @@ func newClusterOrderSyncUpdate(hubClient clnt.Client) func(context.Context, *ckv
 			return err
 		}
 		syncClusterOrderNodeRequests(ctx, clusterOrder, remote)
+		syncClusterOrderAddOnOperators(clusterOrder, remote)
 		syncClusterOrderVIPEndpoints(clusterOrder, remote)
 		return nil
 	}
@@ -144,6 +145,50 @@ func syncClusterOrderVIPEndpoints(clusterOrder *ckv1alpha1.ClusterOrder, remote 
 	}
 	if clusterOrder.Status.IngressEndpoint != "" {
 		remote.GetStatus().SetIngressEndpoint(clusterOrder.Status.IngressEndpoint)
+	}
+}
+
+// syncClusterOrderAddOnOperators publishes one status for each requested operator.
+// The latest recorded attempt is used when an operator has multiple jobs; operators
+// without a job are reported as pending.
+func syncClusterOrderAddOnOperators(clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
+	latestJobs := make(map[string]*ckv1alpha1.AddOnOperatorJobStatus, len(clusterOrder.Status.AddOnOperatorJobs))
+	for i := range clusterOrder.Status.AddOnOperatorJobs {
+		job := &clusterOrder.Status.AddOnOperatorJobs[i]
+		latest, ok := latestJobs[job.Name]
+		if !ok || job.Timestamp.Time.After(latest.Timestamp.Time) {
+			latestJobs[job.Name] = job
+		}
+	}
+
+	statuses := make([]*privatev1.AddOnOperatorStatus, 0, len(clusterOrder.Spec.AddOnOperators))
+	for _, name := range clusterOrder.Spec.AddOnOperators {
+		state := privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_PENDING
+		message := ""
+		if job, ok := latestJobs[name]; ok {
+			state = addOnOperatorInstallState(job.State)
+			message = sanitizeFeedbackText(job.Message)
+		}
+		statuses = append(statuses, privatev1.AddOnOperatorStatus_builder{
+			Name:    name,
+			State:   state,
+			Message: message,
+		}.Build())
+	}
+	remote.GetStatus().SetAddOnOperators(statuses)
+}
+
+// addOnOperatorInstallState converts an AAP job state to the public operator state.
+func addOnOperatorInstallState(state ckv1alpha1.JobState) privatev1.AddOnOperatorInstallState {
+	switch state {
+	case ckv1alpha1.JobStatePending, ckv1alpha1.JobStateWaiting, ckv1alpha1.JobStateRunning:
+		return privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLING
+	case ckv1alpha1.JobStateSucceeded:
+		return privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_INSTALLED
+	case ckv1alpha1.JobStateFailed, ckv1alpha1.JobStateCanceled, ckv1alpha1.JobStateUnknown:
+		return privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_FAILED
+	default:
+		return privatev1.AddOnOperatorInstallState_ADD_ON_OPERATOR_INSTALL_STATE_UNSPECIFIED
 	}
 }
 
@@ -196,8 +241,9 @@ var clusterOrderProvisioningStages = []string{
 //   - Deleting is reported through the DELETING state (see syncClusterOrderPhase and
 //     syncClusterOrderDelete), not as a condition.
 var clusterOrderUnsurfacedConditions = map[string]struct{}{
-	ckv1alpha1.ConditionNamespaceCreated: {},
-	ckv1alpha1.ConditionDeleting:         {},
+	ckv1alpha1.ConditionNamespaceCreated:                        {},
+	ckv1alpha1.ConditionDeleting:                                {},
+	string(ckv1alpha1.ClusterOrderConditionAddOnOperatorsReady): {},
 }
 
 func syncClusterOrderConditions(ctx context.Context, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) {
@@ -386,7 +432,11 @@ func syncClusterOrderNodeRequests(ctx context.Context, clusterOrder *ckv1alpha1.
 
 		var nodeSetID string
 		for candidateNodeSetID, candidateNodeSet := range remote.GetSpec().GetNodeSets() {
-			if candidateNodeSet.GetHostType().GetName() == nodeRequest.ResourceClass {
+			rc := candidateNodeSet.GetBaremetalInstanceType().GetName()
+			if rc == "" {
+				rc = candidateNodeSet.GetHostType().GetName()
+			}
+			if rc == nodeRequest.ResourceClass {
 				nodeSetID = candidateNodeSetID
 				break
 			}
@@ -404,7 +454,7 @@ func syncClusterOrderNodeRequests(ctx context.Context, clusterOrder *ckv1alpha1.
 		nodeSet := nodeSets[nodeSetID]
 		if nodeSet == nil {
 			nodeSet = privatev1.ClusterNodeSet_builder{
-				HostType: privatev1.HostTypeReference_builder{
+				BaremetalInstanceType: privatev1.BareMetalInstanceTypeLocalReference_builder{
 					Name: nodeRequest.ResourceClass,
 				}.Build(),
 			}.Build()

@@ -7,6 +7,7 @@ import type { ClusterWizardValues } from './fields';
 import { createEmptyNodeSetRow } from './fields';
 import { buildClusterStepSchema } from './schemas';
 import { tIdentity as t } from '../../../../../test-utils/i18n';
+import { emptyResourceSelectValue } from '../../../../Form/resourceSelectValue';
 
 const clusterCatalogItem: ClusterCatalogItem = {
   $typeName: 'osac.public.v1.ClusterCatalogItem',
@@ -33,15 +34,6 @@ const clusterCatalogItem: ClusterCatalogItem = {
     shared: false,
   },
   published: true,
-  fieldDefinitions: [
-    {
-      $typeName: 'osac.public.v1.FieldDefinition',
-      path: 'version',
-      displayName: 'Version',
-      editable: true,
-      validationSchema: '',
-    },
-  ],
   templateParameters: {},
 };
 
@@ -59,6 +51,13 @@ const emptyValues: ClusterWizardValues = {
       podCidr: '',
       serviceCidr: '',
     },
+    useDefaultNetwork: true,
+    networkAttachment: {
+      virtualNetwork: emptyResourceSelectValue(),
+      subnet: emptyResourceSelectValue(),
+      securityGroups: [],
+    },
+    autoExternalIpAttachment: false,
   },
 };
 
@@ -447,6 +446,72 @@ describe('buildClusterStepSchema', () => {
         },
       },
     });
+  });
+
+  it('validates networking step when useDefaultNetwork is true', async () => {
+    const errors = await validateStep(
+      'networking',
+      {
+        ...emptyValues,
+        catalogItemId: clusterCatalogItem.id,
+        spec: {
+          ...emptyValues.spec,
+          useDefaultNetwork: true,
+          networkAttachment: {
+            virtualNetwork: emptyResourceSelectValue(),
+            subnet: emptyResourceSelectValue(),
+            securityGroups: [],
+          },
+        },
+      },
+      clusterCatalogItem,
+    );
+    expect(errors).toEqual({});
+  });
+
+  it('rejects missing subnet when useDefaultNetwork is false', async () => {
+    const errors = await validateStep(
+      'networking',
+      {
+        ...emptyValues,
+        catalogItemId: clusterCatalogItem.id,
+        spec: {
+          ...emptyValues.spec,
+          useDefaultNetwork: false,
+          networkAttachment: {
+            virtualNetwork: emptyResourceSelectValue(),
+            subnet: emptyResourceSelectValue(),
+            securityGroups: [],
+          },
+        },
+      },
+      clusterCatalogItem,
+    );
+    expect(errors).toEqual({
+      spec: {
+        networkAttachment: {
+          subnet: {
+            id: 'Subnet is required',
+          },
+        },
+      },
+    });
+  });
+
+  it('validates networking step with autoExternalIpAttachment set to true', async () => {
+    const errors = await validateStep(
+      'networking',
+      {
+        ...emptyValues,
+        catalogItemId: clusterCatalogItem.id,
+        spec: {
+          ...emptyValues.spec,
+          autoExternalIpAttachment: true,
+        },
+      },
+      clusterCatalogItem,
+    );
+    expect(errors).toEqual({});
   });
 
   it('returns undefined for review step', () => {

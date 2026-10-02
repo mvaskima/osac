@@ -21,13 +21,11 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/events"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateFabricDomainsServerBuilder struct {
 	logger            *slog.Logger
-	notifier          events.Notifier
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
@@ -48,11 +46,6 @@ func NewPrivateFabricDomainsServer() *PrivateFabricDomainsServerBuilder {
 
 func (b *PrivateFabricDomainsServerBuilder) SetLogger(value *slog.Logger) *PrivateFabricDomainsServerBuilder {
 	b.logger = value
-	return b
-}
-
-func (b *PrivateFabricDomainsServerBuilder) SetNotifier(value events.Notifier) *PrivateFabricDomainsServerBuilder {
-	b.notifier = value
 	return b
 }
 
@@ -82,7 +75,6 @@ func (b *PrivateFabricDomainsServerBuilder) Build() (result *PrivateFabricDomain
 	generic, err := NewGenericServer[*privatev1.FabricDomain]().
 		SetLogger(b.logger).
 		SetService(privatev1.FabricDomains_ServiceDesc.ServiceName).
-		SetNotifier(b.notifier).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
@@ -162,8 +154,8 @@ func (s *PrivateFabricDomainsServer) Update(ctx context.Context, request *privat
 	if (fullUpdate || updateIncludesField(request.GetUpdateMask(), "spec.type")) && updated.GetSpec().GetType() != old.GetSpec().GetType() {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "type is immutable")
 	}
-	if (fullUpdate || updateIncludesField(request.GetUpdateMask(), "spec.virtual_networks")) && !sameStrings(updated.GetSpec().GetVirtualNetworks(), old.GetSpec().GetVirtualNetworks()) {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "virtual_networks is immutable")
+	if (fullUpdate || updateIncludesField(request.GetUpdateMask(), "spec.virtual_network")) && updated.GetSpec().GetVirtualNetwork() != old.GetSpec().GetVirtualNetwork() {
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "virtual_network is immutable")
 	}
 	if (fullUpdate || updateIncludesField(request.GetUpdateMask(), "spec.servers")) && len(updated.GetSpec().GetServers()) == 0 {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "servers list must not be empty")
@@ -196,14 +188,14 @@ func (s *PrivateFabricDomainsServer) validateFabricDomain(ctx context.Context, o
 	if len(spec.GetServers()) == 0 {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "servers list must not be empty")
 	}
-	if len(spec.GetVirtualNetworks()) != 1 {
-		return grpcstatus.Error(grpccodes.InvalidArgument, "exactly one VirtualNetwork required in Phase 1")
+	if spec.GetVirtualNetwork() == "" {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "virtual_network is required")
 	}
 	if spec.GetType() != privatev1.FabricDomainType_FABRIC_DOMAIN_TYPE_ETHERNET_EW {
 		return grpcstatus.Error(grpccodes.Unimplemented, "type not yet supported")
 	}
 
-	vnResponse, err := s.virtualNetworkDao.Get().SetId(spec.GetVirtualNetworks()[0]).Do(ctx)
+	vnResponse, err := s.virtualNetworkDao.Get().SetId(spec.GetVirtualNetwork()).Do(ctx)
 	if err != nil {
 		return err
 	}
@@ -224,16 +216,4 @@ func (s *PrivateFabricDomainsServer) validateFabricDomain(ctx context.Context, o
 		return grpcstatus.Error(grpccodes.FailedPrecondition, "NetworkClass missing template_id for ethernet_ew")
 	}
 	return nil
-}
-
-func sameStrings(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range left {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
 }

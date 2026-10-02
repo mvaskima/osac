@@ -40,7 +40,14 @@ pluggable backends:
 |----------------|------|---------|
 | `cudn_net` | ClusterUserDefinedNetwork (CUDN) on OpenShift | OVN-Kubernetes |
 | `netris` | Netris Controller API | Netris |
+| `agentless_net` | Unified networking stub for resource-operation testing | AgentlessNet (NotImplemented) |
 | `openstack` | OpenStack Neutron | Neutron |
+
+The `agentless_net` role currently provides twelve deliberate fail-fast
+entrypoints for VirtualNetwork, Subnet, SecurityGroup, ExternalIPPool,
+ExternalIP, and NATGateway create/delete operations. It performs no provider
+side work. Physical attachment, DHCP lease discovery, and ExternalIPAttachment
+operations are reserved for later API and CRD changes.
 
 Plus MetalLB-based ExternalIPPool / ExternalIP management (`metallb_l2`).
 
@@ -63,6 +70,23 @@ Plus MetalLB-based ExternalIPPool / ExternalIP management (`metallb_l2`).
   templates with different sizes, authentication methods, and infrastructure
   backends (Netris, agentless_net).
 - Multi-step workflow playbooks for hosted cluster create / delete / post-install.
+
+### Local LVMS CSI StorageClasses
+
+Single-node VMaaS development/CI deployments can opt in with
+`csi_driver_install_lvms_storage_class_enabled: true`. Tenant Stage 2 creates
+`osac-<tenant>-<tier>` using the OSAC CSI provisioner. The default remains
+`false`, preserving direct TopoLVM classes; ClusterOrder/CaaS stays on its
+legacy storage path.
+
+The selector does not migrate existing classes or volumes. If a same-name
+class already exists with incompatible provisioner, parameters, reclaim policy
+or binding mode, the role fails before modifying any local classes and explains
+the prerequisite. Kubernetes makes these fields immutable. For an existing
+development installation, check its PVC/PV dependencies and explicitly remove
+and recreate the class before opting in, or keep the legacy selector setting.
+The role never deletes a class automatically; existing compatible CSI classes
+remain idempotent.
 
 ## Architecture
 
@@ -101,9 +125,11 @@ capabilities:
   supports_dual_stack: true
 ```
 
-Running `playbook_osac_config_as_code.yml` publishes these as NetworkClasses /
-ComputeClasses that the fulfillment-service auto-discovers, making the system
-pluggable — new backends can be added without changing the operator or API.
+Network roles declare their dispatcher identity for the operator. The installer
+owns NetworkClass creation; `agentless_net` is selected through the installer
+[overlay instructions](../osac-installer/docs/helm-deployment-guide.md#agentlessnet-resource-operation-stub)
+and is not published as a ComputeClass. The generic
+resource playbooks then include the selected role without changing the API.
 
 ## Pre-requisites
 

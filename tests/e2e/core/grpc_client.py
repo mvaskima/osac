@@ -70,6 +70,15 @@ class GRPCClient:
             },
         )
 
+    def update_compute_instance_instance_type(self, *, ci_id: str, instance_type: str) -> dict[str, Any]:
+        return self.call(
+            service=f"{PUBLIC_API}.ComputeInstances/Update",
+            data={
+                "object": {"id": ci_id, "spec": {"instance_type": {"id": instance_type}}},
+                "updateMask": {"paths": ["spec.instance_type"]},
+            },
+        )
+
     def delete_compute_instance(self, *, ci_id: str) -> None:
         self.call(service=f"{PUBLIC_API}.ComputeInstances/Delete", data={"id": ci_id})
 
@@ -434,8 +443,16 @@ class GRPCClient:
         return self.call(service=f"{PRIVATE_API}.InstanceTypes/Get", data={"id": name})
 
     def list_instance_type_names(self) -> list[str]:
-        response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.InstanceTypes/List")
-        return [item["metadata"]["name"] for item in response.get("items", [])]
+        names: list[str] = []
+        page_token: str = ""
+        while True:
+            data: dict[str, Any] | None = {"pageToken": page_token} if page_token else None
+            response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.InstanceTypes/List", data=data)
+            names.extend(item["metadata"]["name"] for item in response.get("items", []))
+            page_token = response.get("nextPageToken", "")
+            if not page_token:
+                break
+        return names
 
     def update_instance_type(self, *, name: str, state: str) -> dict[str, Any]:
         return self.call(

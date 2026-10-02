@@ -40,6 +40,36 @@ func uniqueCIDR() string {
 	return fmt.Sprintf("10.%d.%d.0/28", 20+(n/256)%200, n%256)
 }
 
+func createReadyExternalIPNetworkClass(ctx context.Context, client privatev1.NetworkClassesClient) {
+	id := createDefaultNetworkClass(
+		ctx,
+		client,
+		"test-external-ip-nc",
+		"External IP Test Network Class",
+		"10.230.0.0/16",
+		"10.230.0.0/20",
+	)
+	DeferCleanup(func(cleanupCtx context.Context) {
+		deleteAndWaitForComputeInstanceFixtureResource(cleanupCtx,
+			func(deleteCtx context.Context) error {
+				_, err := client.Delete(deleteCtx, privatev1.NetworkClassesDeleteRequest_builder{Id: id}.Build())
+				return err
+			},
+			func(getCtx context.Context) error {
+				_, err := client.Get(getCtx, privatev1.NetworkClassesGetRequest_builder{Id: id}.Build())
+				return err
+			})
+	})
+
+	Eventually(func(g Gomega) {
+		response, err := client.Get(ctx, privatev1.NetworkClassesGetRequest_builder{Id: id}.Build())
+		g.Expect(err).ToNot(HaveOccurred())
+		g.Expect(response.GetObject().GetStatus().GetHub()).ToNot(BeEmpty())
+		g.Expect(response.GetObject().GetStatus().GetState()).To(
+			Equal(privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY))
+	}, time.Minute, time.Second).Should(Succeed())
+}
+
 var _ = Describe("Private ExternalIPPool CRUD", func() {
 	var (
 		ctx    context.Context
@@ -312,6 +342,7 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 var _ = Describe("ExternalIP lifecycle", func() {
 	var (
 		ctx                      context.Context
+		networkClassesClient     privatev1.NetworkClassesClient
 		poolsClient              privatev1.ExternalIPPoolsClient
 		externalIPsClient        publicv1.ExternalIPsClient
 		privateExternalIPsClient privatev1.ExternalIPsClient
@@ -321,10 +352,12 @@ var _ = Describe("ExternalIP lifecycle", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
+		networkClassesClient = privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 		poolsClient = privatev1.NewExternalIPPoolsClient(tool.InternalView().AdminConn())
 		externalIPsClient = publicv1.NewExternalIPsClient(tool.ExternalView().UserConn())
 		privateExternalIPsClient = privatev1.NewExternalIPsClient(tool.InternalView().AdminConn())
 		publicPoolsClient = publicv1.NewExternalIPPoolsClient(tool.ExternalView().UserConn())
+		createReadyExternalIPNetworkClass(ctx, networkClassesClient)
 
 		poolId = fmt.Sprintf("test-pool-%s", uuid.New())
 		_, err := poolsClient.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
@@ -348,6 +381,7 @@ var _ = Describe("ExternalIP lifecycle", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(resp.GetObject().GetStatus().GetState()).To(
 				Equal(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_PENDING))
+			g.Expect(resp.GetObject().GetStatus().GetHub()).ToNot(BeEmpty())
 		}, time.Minute, time.Second).Should(Succeed())
 
 		getResp, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{
@@ -366,6 +400,15 @@ var _ = Describe("ExternalIP lifecycle", func() {
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+
+		Eventually(func(g Gomega) {
+			resp, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{
+				Id: poolId,
+			}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(resp.GetObject().GetStatus().GetState()).To(
+				Equal(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY))
+		}, time.Minute, time.Second).Should(Succeed())
 	})
 
 	It("Can create, get, and list an ExternalIP", func() {
@@ -549,6 +592,7 @@ var _ = Describe("ExternalIP lifecycle", func() {
 var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 	var (
 		ctx                      context.Context
+		networkClassesClient     privatev1.NetworkClassesClient
 		poolsClient              privatev1.ExternalIPPoolsClient
 		externalIPsClient        publicv1.ExternalIPsClient
 		privateExternalIPsClient privatev1.ExternalIPsClient
@@ -567,6 +611,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 
 	BeforeEach(func() {
 		ctx = context.Background()
+		networkClassesClient = privatev1.NewNetworkClassesClient(tool.InternalView().AdminConn())
 		poolsClient = privatev1.NewExternalIPPoolsClient(tool.InternalView().AdminConn())
 		externalIPsClient = publicv1.NewExternalIPsClient(tool.ExternalView().UserConn())
 		privateExternalIPsClient = privatev1.NewExternalIPsClient(tool.InternalView().AdminConn())
@@ -575,6 +620,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 		clustersClient = publicv1.NewClustersClient(tool.ExternalView().UserConn())
 		hostTypesClient = privatev1.NewHostTypesClient(tool.InternalView().AdminConn())
 		clusterTemplatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
+		createReadyExternalIPNetworkClass(ctx, networkClassesClient)
 
 		poolId = fmt.Sprintf("test-pool-%s", uuid.New())
 		_, err := poolsClient.Create(ctx, privatev1.ExternalIPPoolsCreateRequest_builder{
@@ -598,6 +644,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			g.Expect(err).ToNot(HaveOccurred())
 			g.Expect(resp.GetObject().GetStatus().GetState()).To(
 				Equal(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_PENDING))
+			g.Expect(resp.GetObject().GetStatus().GetHub()).ToNot(BeEmpty())
 		}, time.Minute, time.Second).Should(Succeed())
 
 		poolGetResp, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{
@@ -616,6 +663,15 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+
+		Eventually(func(g Gomega) {
+			resp, err := poolsClient.Get(ctx, privatev1.ExternalIPPoolsGetRequest_builder{
+				Id: poolId,
+			}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(resp.GetObject().GetStatus().GetState()).To(
+				Equal(privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_READY))
+		}, time.Minute, time.Second).Should(Succeed())
 
 		externalIPId = fmt.Sprintf("test-ip-%s", uuid.New())
 		_, err = externalIPsClient.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{

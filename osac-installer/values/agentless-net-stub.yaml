@@ -1,0 +1,14 @@
+global:
+  expertOverrides:
+    # Profiles such as caas-ci preserve their AAP settings unless this facade
+    # is explicitly allowed to derive the AgentlessNet backend.
+    aap: false
+  networking:
+    fabricManager: agentless_net
+    k8sManager: ""
+    networkClass:
+      title: AgentlessNet networking stub
+      description: >-
+        AgentlessNet is registered for unified networking. Available resource
+        operations return NotImplemented. Physical attachment, DHCP discovery,
+        and ExternalIPAttachment are outside this stub.
