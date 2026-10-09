@@ -3,6 +3,8 @@
 # --- Service Enablement ---
 global:
   osacDeploymentId: "ci/osac"
+  fulfillmentTrust:
+    enabled: false
   services:
     caas:
       enabled: true
@@ -122,6 +124,7 @@ ui:
         caBundle:
           configMap: ca-bundle
   auth:
+    oidcIssuerURL: https://keycloak.keycloak.svc.cluster.local/realms/osac
     certs:
       caBundle:
         configMap: ca-bundle

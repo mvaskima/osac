@@ -11,7 +11,6 @@ import { renderWithProviders } from '../../test-utils/TestProviders';
 const makeVolume = (overrides: {
   id: string;
   name?: string;
-  project?: string;
   storageTier?: string;
   sizeGib?: bigint;
   accessMode?: VolumeAccessMode;
@@ -21,7 +20,6 @@ const makeVolume = (overrides: {
     id: overrides.id,
     metadata: {
       name: overrides.name ?? `vol-${overrides.id}`,
-      project: overrides.project ?? 'default-project',
       creationTimestamp: { seconds: BigInt(1717000000), nanos: 0 },
     },
     spec: {
@@ -50,7 +48,6 @@ describe('VolumeTable', () => {
     expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual([
       'Name',
       'State',
-      'Project',
       'Storage Tier',
       'Size',
       'Access Mode',
@@ -84,21 +81,6 @@ describe('VolumeTable', () => {
     expect(screen.getByText('ReadWriteMany')).toBeInTheDocument();
   });
 
-  it('renders project name', () => {
-    renderTable([makeVolume({ id: 'v-1', project: 'team-alpha' })]);
-
-    expect(screen.getByText('team-alpha')).toBeInTheDocument();
-  });
-
-  it('renders "Default" when project is an empty string', () => {
-    renderTable([makeVolume({ id: 'v-1', project: '' })]);
-
-    const projectCell = screen
-      .getAllByRole('cell')
-      .find((cell) => cell.getAttribute('data-label') === 'Project');
-    expect(projectCell).toHaveTextContent('Default');
-  });
-
   it('renders storage tier name', () => {
     renderTable([makeVolume({ id: 'v-1', storageTier: 'premium-ssd' })]);
 
@@ -125,10 +107,10 @@ describe('VolumeTable', () => {
     expect(screen.getByRole('button', { name: 'Actions for my-vol' })).toBeInTheDocument();
   });
 
-  it('does not render the actions menu for a DELETING volume', () => {
+  it('renders the actions menu for a DELETING volume', () => {
     renderTable([makeVolume({ id: 'v-1', name: 'my-vol', state: VolumeState.DELETING })]);
 
-    expect(screen.queryByRole('button', { name: 'Actions for my-vol' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Actions for my-vol' })).toBeInTheDocument();
   });
 
   it('shows em-dash for missing fields when spec is absent', () => {

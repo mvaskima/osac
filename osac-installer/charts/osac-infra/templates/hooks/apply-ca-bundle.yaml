@@ -179,6 +179,8 @@ spec:
               value: {{ .Release.Namespace | quote }}
             - name: OSAC_NAMESPACE
               value: {{ .Values.osacNamespace | quote }}
+            - name: CSI_NAMESPACE
+              value: {{ .Values.csiNamespace | quote }}
             - name: USE_DEFAULT_CAS
               value: {{ .Values.keycloak.route.publicIngress | quote }}
           volumeMounts:
@@ -194,12 +196,7 @@ spec:
               drop:
                 - ALL
           resources:
-            requests:
-              cpu: 50m
-              memory: 128Mi
-            limits:
-              cpu: 200m
-              memory: 512Mi
+            {{- toYaml .Values.hookResources | nindent 12 }}
           command:
             - /bin/bash
             - /scripts/apply-ca-bundle.sh
@@ -429,12 +426,7 @@ spec:
               drop:
                 - ALL
           resources:
-            requests:
-              cpu: 50m
-              memory: 128Mi
-            limits:
-              cpu: 200m
-              memory: 256Mi
+            {{- toYaml .Values.hookResources | nindent 12 }}
           command:
             - /bin/bash
             - /scripts/delete-ca-bundle.sh

@@ -41,6 +41,14 @@ respective areas.
 - Do not edit sibling component sources through installer chart paths.
 - `make sync-charts` is an alias for `make helm-deps`; review dependency changes before committing.
 
+## Integration Testing
+
+| Touched area | Required validation | Command / follow-up |
+|---|---|---|
+| MCE defaults, lifecycle gate, image overrides, or compatibility RBAC | Helm contract | `make mce-render-test` |
+| Fulfillment hook commands, CA mounts, or gate rendering | Helm contract | `make fulfillment-trust-render-test` |
+| Deployed hooks or cross-component startup | Component integration | `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment` with a deployed Kind environment; see [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer) |
+
 ## Validation
 
 From `osac-installer/`:
@@ -49,6 +57,8 @@ From `osac-installer/`:
 yamllint --strict .
 make helm-validate
 pre-commit run --all-files
+make mce-render-test
+make fulfillment-trust-render-test
 ```
 
 `pre-commit run --all-files` does not constitute a full repository secret scan;

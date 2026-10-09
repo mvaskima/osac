@@ -20,9 +20,11 @@ export const createEmptyComputeInstanceValues = (): ComputeInstanceWizardValues 
     bootDisk: { sizeGib: '', storageTier: emptyResourceSelectValue() },
     additionalDisks: [],
     networking: {
-      virtualNetwork: '',
-      subnet: '',
+      useDefaultNetwork: true,
+      virtualNetwork: emptyResourceSelectValue(),
+      subnet: emptyResourceSelectValue(),
       securityGroups: [],
+      autoExternalIpAttachment: false,
     },
   },
 });
@@ -55,15 +57,25 @@ export const buildComputeInstanceCreatePayload = (
       id: values.spec.instanceType,
     },
     runStrategy: ComputeInstanceRunStrategy.COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS,
-    networkAttachments: [
-      {
-        subnet: {
-          id: values.spec.networking.subnet,
-        },
-        securityGroups: values.spec.networking.securityGroups.map((id) => ({ id })),
-      },
-    ],
   };
+
+  if (!values.spec.networking.useDefaultNetwork) {
+    const subnetId = values.spec.networking.subnet.id.trim();
+    if (subnetId) {
+      spec.networkAttachments = [
+        {
+          subnet: { id: subnetId },
+          securityGroups: values.spec.networking.securityGroups
+            .filter((sg) => sg.id.trim())
+            .map((sg) => ({ id: sg.id })),
+        },
+      ];
+    }
+  }
+
+  if (values.spec.networking.autoExternalIpAttachment) {
+    spec.autoExternalIpAttachment = true;
+  }
 
   const sshKeyName = values.spec.sshKey.name.trim();
   if (sshKeyName) {

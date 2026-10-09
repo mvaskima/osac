@@ -12,12 +12,15 @@
 #
 
 # Root-level wrapper so Copr can find .copr/Makefile at the top of the
-# monorepo.  Copr clones the repo and runs:
+# monorepo. Copr runs the target from the configured source subdirectory, so
+# resolve the repository root from this Makefile instead of the working dir.
 #
 #   make -f .copr/Makefile srpm outdir=<results>
 #
 # This simply delegates to the fulfillment-service SRPM build script.
 
+repo_root := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
+
 .PHONY: srpm
 srpm:
-	outdir="$(outdir)" ./fulfillment-service/.copr/srpm.sh
+	outdir="$(outdir)" "$(repo_root)/fulfillment-service/.copr/srpm.sh"

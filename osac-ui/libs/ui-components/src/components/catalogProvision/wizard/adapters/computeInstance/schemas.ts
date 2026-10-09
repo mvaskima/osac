@@ -1,6 +1,7 @@
 import type { TFunction } from 'i18next';
 import * as yup from 'yup';
 
+import { buildNetworkAttachmentSchemas } from '@osac/ui-components/validation/network-attachment';
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 import { userDataSchema } from '@osac/ui-components/validation/user-data';
 
@@ -75,13 +76,24 @@ const buildComputeInstanceFieldDefinitions = (catalogItem: unknown, t: TFunction
         storageTier: storageTierSchema(t),
       }),
     ),
-    specNetworking: yup.object({
-      virtualNetwork: yup
-        .string()
-        .required(t('catalogProvision.validation.virtualNetworkRequired')),
-      subnet: yup.string().required(t('catalogProvision.validation.subnetRequired')),
-      securityGroups: yup.array().min(1, t('catalogProvision.validation.securityGroupRequired')),
-    }),
+    specNetworking: (() => {
+      const na = buildNetworkAttachmentSchemas(t);
+      return yup.object({
+        useDefaultNetwork: yup.boolean(),
+        virtualNetwork: yup.object().when('useDefaultNetwork', {
+          is: false,
+          then: () => na.requiredVirtualNetwork,
+          otherwise: () => na.optionalResourceSelect,
+        }),
+        subnet: yup.object().when('useDefaultNetwork', {
+          is: false,
+          then: () => na.requiredSubnet,
+          otherwise: () => na.optionalResourceSelect,
+        }),
+        securityGroups: na.securityGroupsSchema,
+        autoExternalIpAttachment: yup.boolean(),
+      });
+    })(),
   };
 };
 

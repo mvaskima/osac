@@ -1,3 +1,8 @@
+global:
+  fulfillmentTrust:
+    enabled: false
+    tenantNamespace: osac-csi
+
 image:
   repository: ghcr.io/osac-project/osac-operator
   tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
@@ -24,11 +29,20 @@ stall:
   preparingInfrastructureThreshold: "15m"
   controlPlaneStartingThreshold: "30m"
   workersJoiningThreshold: "20m"
-  workersJoiningByHostType: {}
+  workersJoiningByInstanceType: {}
+
+# On OpenShift, trust the platform-managed ingress CA when fetching Assisted
+# Service discovery ignition through its HTTPS Route.
+ignition:
+  trustIngressCA: false
 
 fulfillment:
   serverAddress: ""
   tokenFile: ""
+  tls:
+    caBundle:
+      configMap: ca-bundle
+      key: bundle.pem
   configMap:
     name: ""
     optional: true
@@ -118,8 +132,9 @@ networkManagers:
     agentless_net:
       enabled: false
       description: >-
-        AgentlessNet unified networking stub. Available resource operations
-        return NotImplemented.
+        AgentlessNet VirtualNetwork baseline. Implements UID-keyed namespaces,
+        /31 transit links, and the namespace forwarding policy. Other
+        networking resource operations return NotImplemented.
       capabilities:
       - ipv4
   k8sManagers:

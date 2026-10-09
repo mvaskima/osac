@@ -145,33 +145,29 @@ const advanceToNetworkingStep = async (user: UserEvent, catalogItemTitle: string
   await fillStorageStep(user);
   await clickWizardNext(user);
   await waitFor(() => {
+    expect(screen.getByLabelText(/Use tenant default network/)).toBeInTheDocument();
+  });
+};
+
+const enableCustomNetworking = async (user: UserEvent) => {
+  await user.click(screen.getByLabelText(/Use tenant default network/));
+  await waitFor(() => {
     expect(screen.getByLabelText(/^Virtual network/)).toBeInTheDocument();
   });
 };
 
-const selectNetworkingPickers = async (user: UserEvent) => {
+const selectNetworkingPickers = async (_user: UserEvent) => {
+  // Wait for VN and Subnet to be auto-selected (single-option auto-select)
   await waitFor(() => {
     expect(screen.getByLabelText(/^Virtual network/)).not.toBeDisabled();
     expect(screen.getByLabelText(/^Virtual network/)).toHaveTextContent('tenant-vn');
     expect(screen.getByLabelText(/^Subnet/)).toHaveTextContent('tenant-subnet');
-    expect(screen.getByText('default-sg')).toBeInTheDocument();
-  });
-
-  const sgToggle = screen.getByLabelText(/^Security groups/);
-  if (sgToggle.textContent === 'Select security groups') {
-    await user.click(sgToggle);
-    await user.click(screen.getByRole('menuitemcheckbox', { name: /default-sg/ }));
-  }
-
-  await waitFor(() => {
-    expect(screen.getByLabelText(/^Security groups/)).not.toHaveTextContent(
-      'Select security groups',
-    );
   });
 };
 
 const advanceToReviewStep = async (user: UserEvent, catalogItemTitle: string) => {
   await advanceToNetworkingStep(user, catalogItemTitle);
+  await enableCustomNetworking(user);
   await selectNetworkingPickers(user);
   await clickWizardNext(user);
   await waitFor(() => {
@@ -835,6 +831,7 @@ describe('CatalogProvisionWizard', () => {
       },
     });
     await advanceToNetworkingStep(user, vmCatalogItem.metadata?.name ?? '');
+    await enableCustomNetworking(user);
 
     await waitFor(() => {
       expect(screen.getByLabelText(/^Virtual network/)).toHaveTextContent('tenant-vn');
@@ -860,14 +857,13 @@ describe('CatalogProvisionWizard', () => {
     });
   });
 
-  it('shows security group names on the review step', async () => {
+  it('shows empty security groups on the review step when none are selected', async () => {
     const { user } = renderWizard();
 
     await advanceToReviewStep(user, vmCatalogItem.metadata?.name ?? '');
 
-    await waitFor(() => {
-      expect(screen.getByText('default-sg')).toBeInTheDocument();
-    });
+    expect(screen.getByText('Security groups')).toBeInTheDocument();
+    expect(screen.queryByText('default-sg')).not.toBeInTheDocument();
   });
 
   it('shows instance type on the review step', async () => {
@@ -901,7 +897,7 @@ describe('CatalogProvisionWizard', () => {
     expect(onProvision.mock.calls[0][0]).not.toHaveProperty('spec.vcpus');
     expect(onProvision.mock.calls[0][0]).not.toHaveProperty('spec.memoryGib');
     expect(onProvision.mock.calls[0][0]).toHaveProperty('spec.networkAttachments', [
-      { subnet: { id: 'subnet-1' }, securityGroups: [{ id: 'sg-1' }] },
+      { subnet: { id: 'subnet-1' }, securityGroups: [] },
     ]);
   });
 

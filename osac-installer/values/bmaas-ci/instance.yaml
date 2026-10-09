@@ -3,6 +3,8 @@
 # --- Service Enablement ---
 global:
   osacDeploymentId: "ci/osac"
+  fulfillmentTrust:
+    enabled: false
   services:
     caas:
       enabled: false
@@ -151,6 +153,8 @@ ui:
         caBundle:
           configMap: ca-bundle
   auth:
+    # oidcIssuerURL defaults to match service.auth.issuerUrl -- set automatically
+    # by install-osac via --set ui.auth.oidcIssuerURL when global.clusterDomain is set.
     certs:
       caBundle:
         configMap: ca-bundle
@@ -210,7 +214,6 @@ hubAccess:
 lvms:
   enabled: true
 
-# Bundled PostgreSQL: single-pod ephemeral database for testing.
-# Uses fsync=off — data is lost on restart. Not for production.
+# Bundled PostgreSQL for testing only; not intended for production.
 bundledPostgres:
   enabled: true

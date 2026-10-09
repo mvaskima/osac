@@ -1074,7 +1074,7 @@ func validateBareMetalSubnetFabricManager(
 func (s *PrivateBareMetalInstancesServer) autoProvisionExternalIP(
 	ctx context.Context, bmi *privatev1.BareMetalInstance,
 ) error {
-	pool, err := SelectExternalIPPool(ctx, s.externalIPPoolDao, privatev1.IPFamily_IP_FAMILY_UNSPECIFIED)
+	pool, err := SelectExternalIPPool(ctx, s.externalIPPoolDao, privatev1.IPFamily_IP_FAMILY_IPV4)
 	if err != nil {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "auto_external_ip_attachment: %s", err)
 	}

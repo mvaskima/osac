@@ -469,7 +469,7 @@ describe('buildClusterStepSchema', () => {
     expect(errors).toEqual({});
   });
 
-  it('rejects missing subnet when useDefaultNetwork is false', async () => {
+  it('requires virtual network and subnet when useDefaultNetwork is false', async () => {
     const errors = await validateStep(
       'networking',
       {
@@ -490,12 +490,32 @@ describe('buildClusterStepSchema', () => {
     expect(errors).toEqual({
       spec: {
         networkAttachment: {
-          subnet: {
-            id: 'Subnet is required',
-          },
+          virtualNetwork: { id: 'Virtual network is required' },
+          subnet: { id: 'Subnet is required' },
         },
       },
     });
+  });
+
+  it('accepts valid custom networking when useDefaultNetwork is false', async () => {
+    const errors = await validateStep(
+      'networking',
+      {
+        ...emptyValues,
+        catalogItemId: clusterCatalogItem.id,
+        spec: {
+          ...emptyValues.spec,
+          useDefaultNetwork: false,
+          networkAttachment: {
+            virtualNetwork: { id: 'vn-1', name: 'vn-1' },
+            subnet: { id: 'subnet-1', name: 'subnet-1' },
+            securityGroups: [],
+          },
+        },
+      },
+      clusterCatalogItem,
+    );
+    expect(errors).toEqual({});
   });
 
   it('validates networking step with autoExternalIpAttachment set to true', async () => {

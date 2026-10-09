@@ -2,6 +2,7 @@ import type { TFunction } from 'i18next';
 import * as yup from 'yup';
 
 import type { ClusterCatalogItem } from '@osac/types';
+import { buildNetworkAttachmentSchemas } from '@osac/ui-components/validation/network-attachment';
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 
 import type { ClusterNodeSetRow } from './fields';
@@ -139,17 +140,6 @@ const buildClusterFieldDefinitions = (catalogItem: unknown, t: TFunction) => {
       ),
     }),
     specUseDefaultNetwork: yup.boolean(),
-    specNetworkAttachment: yup.object({
-      virtualNetwork: yup.object({ id: yup.string(), name: yup.string() }),
-      subnet: yup.object({
-        id: yup.string().test('subnet-required', t('Subnet is required'), function (value) {
-          const spec = this.from?.[2]?.value as { useDefaultNetwork?: boolean } | undefined;
-          return spec?.useDefaultNetwork !== false || Boolean(value?.trim());
-        }),
-        name: yup.string(),
-      }),
-      securityGroups: yup.array().of(yup.object({ id: yup.string(), name: yup.string() })),
-    }),
     specAutoExternalIpAttachment: yup.boolean(),
   };
 };
@@ -189,15 +179,31 @@ export const buildClusterStepSchema = (
           nodeSetRows: fields.specNodeSetRows,
         }),
       });
-    case 'networking':
+    case 'networking': {
+      const na = buildNetworkAttachmentSchemas(t);
       return yup.object({
         spec: yup.object({
           network: fields.specNetwork,
           useDefaultNetwork: fields.specUseDefaultNetwork,
-          networkAttachment: fields.specNetworkAttachment,
+          networkAttachment: yup.object().when('useDefaultNetwork', {
+            is: false,
+            then: () =>
+              yup.object({
+                virtualNetwork: na.requiredVirtualNetwork,
+                subnet: na.requiredSubnet,
+                securityGroups: na.securityGroupsSchema,
+              }),
+            otherwise: () =>
+              yup.object({
+                virtualNetwork: na.optionalResourceSelect,
+                subnet: na.optionalResourceSelect,
+                securityGroups: na.securityGroupsSchema,
+              }),
+          }),
           autoExternalIpAttachment: fields.specAutoExternalIpAttachment,
         }),
       });
+    }
     default:
       return undefined;
   }
