@@ -29,6 +29,7 @@ from tests.e2e.core.helpers import (
     wait_for_virtual_network_deletion,
     wait_for_virtual_network_ready,
 )
+from tests.e2e.core.hub_access import ensure_hub_access_console_rbac, remove_hub_access_console_rbac
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.runner import env, poll_until
 from tests.e2e.vmaas.regression import tenant_isolation_console as console
@@ -62,6 +63,15 @@ def _guest_console_password() -> str:
 def _require_guest_console_password() -> None:
     """Fail setup if the guest console password is not configured."""
     _guest_console_password()
+
+
+@pytest.fixture(scope="class", autouse=True)
+def _ensure_hub_access_console_rbac(k8s_hub_client: K8sClient, namespace: str) -> Iterator[None]:
+    """Grant hub-access serial/VNC console get before ping, then remove the rule we added."""
+    patched = ensure_hub_access_console_rbac(k8s=k8s_hub_client, namespace=namespace)
+    yield
+    if patched:
+        remove_hub_access_console_rbac(k8s=k8s_hub_client, namespace=namespace)
 
 
 _ADMIN_GET = {
