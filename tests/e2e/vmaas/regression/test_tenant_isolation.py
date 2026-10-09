@@ -424,7 +424,7 @@ def _best_effort_delete_vm(client: GRPCClient, k8s: K8sClient, vm: dict[str, str
             wait_for_deletion(k8s=k8s, name=vm["cr"])
         wait_for_grpc_removal(grpc=client, uuid=vm["id"])
     except Exception as exc:
-        logger.warning("Failed to delete ComputeInstance %s: %s", vm.get("id"), exc)
+        logger.warning("Failed to delete ComputeInstance %s: %s", vm.get("id"), type(exc).__name__)
 
 
 def _best_effort_delete_overlay(client: GRPCClient, k8s: K8sClient, prefix: str, state: dict[str, Any]) -> None:
@@ -438,21 +438,21 @@ def _best_effort_delete_overlay(client: GRPCClient, k8s: K8sClient, prefix: str,
             if sg_cr:
                 wait_for_security_group_deletion(k8s=k8s, name=sg_cr)
         except Exception as exc:
-            logger.warning("Failed to delete SecurityGroup %s: %s", sg_id, exc)
+            logger.warning("Failed to delete SecurityGroup %s: %s", sg_id, type(exc).__name__)
     if subnet_id:
         try:
             client.delete_subnet(subnet_id=subnet_id)
             if subnet_cr:
                 wait_for_subnet_deletion(k8s=k8s, name=subnet_cr)
         except Exception as exc:
-            logger.warning("Failed to delete Subnet %s: %s", subnet_id, exc)
+            logger.warning("Failed to delete Subnet %s: %s", subnet_id, type(exc).__name__)
     if vn_id:
         try:
             client.delete_virtual_network(vn_id=vn_id)
             if vn_cr:
                 wait_for_virtual_network_deletion(k8s=k8s, name=vn_cr)
         except Exception as exc:
-            logger.warning("Failed to delete VirtualNetwork %s: %s", vn_id, exc)
+            logger.warning("Failed to delete VirtualNetwork %s: %s", vn_id, type(exc).__name__)
 
 
 def _best_effort_delete_disk_image(client: GRPCClient, disk_image_id: str | None) -> None:
@@ -462,7 +462,7 @@ def _best_effort_delete_disk_image(client: GRPCClient, disk_image_id: str | None
     try:
         client.delete_disk_image(disk_image_id=disk_image_id)
     except Exception as exc:
-        logger.warning("Failed to delete DiskImage %s: %s", disk_image_id, exc)
+        logger.warning("Failed to delete DiskImage %s: %s", disk_image_id, type(exc).__name__)
 
 
 def _cleanup_resources(
@@ -493,7 +493,7 @@ def _cleanup_resources(
         try:
             private_grpc.call(service=f"{PRIVATE_API}.DiskImages/Delete", data={"id": global_di_id})
         except Exception as exc:
-            logger.warning("Failed to delete global DiskImage %s: %s", global_di_id, exc)
+            logger.warning("Failed to delete global DiskImage %s: %s", global_di_id, type(exc).__name__)
 
 
 @pytest.fixture(scope="class", autouse=True)
@@ -801,7 +801,7 @@ class TestVmaasTenantIsolation:
             try:
                 _restore_allow_all()
             except Exception as exc:
-                logger.warning("Failed to restore Tenant-1 SecurityGroup %s: %s", sg_id, exc)
+                logger.warning("Failed to restore Tenant-1 SecurityGroup %s: %s", sg_id, type(exc).__name__)
 
     def test_06_tenant2_deletes_vms(self, jwt_grpc_tenant2: GRPCClient, k8s_hub_client: K8sClient) -> None:
         """Delete Tenant-2 (and copycat) VMs and assert they disappear from Tenant-2 list."""
