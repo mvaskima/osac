@@ -804,7 +804,7 @@ class TestVmaasTenantIsolation:
                 logger.warning("Failed to restore Tenant-1 SecurityGroup %s: %s", sg_id, type(exc).__name__)
 
     def test_06_tenant2_deletes_vms(self, jwt_grpc_tenant2: GRPCClient, k8s_hub_client: K8sClient) -> None:
-        """Delete Tenant-2 (and copycat) VMs and assert they disappear from Tenant-2 list."""
+        """Delete Tenant-2 (and copycat) VMs and assert Get returns NotFound for each."""
         _require(self.state, "t2_vm1", "t2_vm2")
         deleted: list[str] = []
         to_delete: list[tuple[str | None, dict[str, str]]] = []
@@ -833,9 +833,8 @@ class TestVmaasTenantIsolation:
                 self.state.pop(key, None)
         self.state.pop("copycat_vms", None)
         self.state.pop("copycat_vm", None)
-        remaining = jwt_grpc_tenant2.list_compute_instance_ids()
         for ci_id in deleted:
-            assert ci_id not in remaining
+            _assert_not_found(lambda ci_id=ci_id: jwt_grpc_tenant2.get_compute_instance(ci_id=ci_id))
 
     def test_07_tenant1_unaffected(
         self, jwt_grpc_tenant1: GRPCClient, k8s_hub_client: K8sClient, fulfillment_address: str

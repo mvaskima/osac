@@ -159,12 +159,24 @@ def _authenticate(
         )
 
 
+def _last_nonempty_line(text: str) -> str:
+    """Return the last non-empty console line after normalizing CR."""
+    for line in reversed(text.replace("\r", "").split("\n")):
+        if line.strip():
+            return line
+    return ""
+
+
 def _logged_in(text: str, username: str) -> bool:
-    """Return True when console output looks like a logged-in shell prompt."""
-    lower = text.lower()
-    if "login incorrect" in lower:
+    """Return True when the last non-empty console line looks like a shell prompt."""
+    if "login incorrect" in text.lower():
         return False
-    return "$" in text or "#" in text or f"{username}@" in lower
+    last = _last_nonempty_line(text)
+    if not last:
+        return False
+    if re.search(r"[$#]\s*$", last):
+        return True
+    return bool(re.search(rf"(?i){re.escape(username)}@", last))
 
 
 def _canonical_dest_ip(dest_ip: str) -> str:
