@@ -25,7 +25,7 @@ from tests.e2e.core.helpers import (
     wait_for_provision,
     wait_for_running,
 )
-from tests.e2e.core.hub_access import ensure_hub_access_console_rbac
+from tests.e2e.core.hub_access import ensure_hub_access_console_rbac, remove_hub_access_console_rbac
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 
@@ -38,9 +38,14 @@ CONSOLE_GRPC_SERVICE = "osac.public.v1.ConsoleProxy/Connect"
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _ensure_hub_access_console_rbac(k8s_hub_client: K8sClient, namespace: str) -> None:
+def _ensure_hub_access_console_rbac(k8s_hub_client: K8sClient, namespace: str) -> Iterator[None]:
     """Grant hub-access serial/VNC console get before opening console connections."""
-    ensure_hub_access_console_rbac(k8s=k8s_hub_client, namespace=namespace)
+    patched = ensure_hub_access_console_rbac(k8s=k8s_hub_client, namespace=namespace)
+    try:
+        yield
+    finally:
+        if patched:
+            remove_hub_access_console_rbac(k8s=k8s_hub_client, namespace=namespace)
 
 
 @pytest.fixture(scope="module")
