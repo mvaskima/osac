@@ -231,6 +231,8 @@ class GRPCClient:
         # Public SecurityGroups/Update was removed (OSAC-5373). Live rule
         # changes use private Update. GET-merge the stored object so omitted
         # spec fields, including immutable virtual_network, are not cleared.
+        if ingress is None and egress is None:
+            raise ValueError("update_security_group_rules requires ingress and/or egress")
         current: dict[str, Any] = self.call(service=f"{PRIVATE_API}.SecurityGroups/Get", data={"id": sg_id})
         obj = current.get("object")
         existing: dict[str, Any] = obj if isinstance(obj, dict) else current
