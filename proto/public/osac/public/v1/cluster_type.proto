@@ -374,7 +374,7 @@ message ClusterUpgradeComponent {
 // State and progress of one component upgrade attempt.
 message ClusterUpgradeHistoryEntry {
   // Control plane or node set selected for this attempt.
-  ClusterUpgradeComponent component = 1;
+  ClusterUpgradeComponent component = 1 [(buf.validate.field).required = true];
 
   // OpenShift version observed on the selected component when the attempt was accepted, as a semver string.
   string source_version = 2;

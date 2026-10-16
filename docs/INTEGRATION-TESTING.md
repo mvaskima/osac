@@ -214,6 +214,24 @@ explicit disabled-state suppression, enabled empty-override behavior, and the
 CaaS profile's explicit enablement with inherited defaults. It does not install
 MCE or call an Operator catalog or cluster API.
 
+The `make -C osac-installer kind-runtime-test` unit suite is owned by installer
+implementation work. It uses command stubs to check runtime selection, sudo
+authentication and credential expiry, Makefile/host setup routing, safe
+credential reset, resuming stopped nodes after storage preparation and waiting
+for API readiness, Helm 3/4 apply flags for devstack and OSAC releases,
+image loading without virtualization prerequisites or
+non-portable temporary-file patterns,
+TopoLVM chart download when the locked archive is missing, reuse when present,
+exclusion from general chart dependency builds,
+and install failure before cluster setup when the download fails, and
+device-mapper major detection in the selected engine, refusal of failed or
+invalid probes, replacement of stale helper permissions or images, and cleanup
+capabilities and ordering without running a container engine or
+modifying host privileges. It does not exercise real password entry, TopoLVM
+devices, or a deployed KubeVirt installation.
+The chart dependency cases stub Helm; upstream chart downloads are not
+exercised by this unit suite.
+
 The `make fulfillment-trust-render-test` Helm contract renders the production
 umbrella chart with trust enabled and disabled. It asserts the operator trust
 reconciler gate and checks that CA mounts and verified
@@ -281,6 +299,7 @@ Touched-area requirements: [component guide](../osac-operator/AGENTS.md#integrat
   and gRPC endpoints to verify client-credentials token acquisition and
   authenticated calls in both connection modes. The installer render contract
   checks the Secret references and issuer ConfigMap.
+- **VMaaS network-attachment IP feedback and ExternalIP DNAT ([OSAC-2479](https://redhat.atlassian.net/browse/OSAC-2479), [OSAC-2485](https://redhat.atlassian.net/browse/OSAC-2485), DEV):** `test/integration/computeinstance_network_status_test.go` writes and reads `computeNetworkAttachmentStatuses` through the installed ComputeInstance CRD status subresource in Kind. Controller unit tests cover selection of the default KubeVirt interface, Subnet CR name-to-ID resolution, Fulfillment status feedback, and waiting for/using the reported IP as the ExternalIP target. This verifies the operator API and controller contract; the Kind suite does not run a real VMI, AAP workflow, or network fabric, so it makes no claim about provider-level reachability.
 - **Cross-cluster fulfillment OAuth:** No deployed suite currently covers this
   boundary. With bundled Keycloak, the dev installer provisions the existing
   `osac-controller` credentials through `osac-infra`, but the local
@@ -564,7 +583,7 @@ Touched-area requirements: [component guide](../tests/e2e/AGENTS.md#touched-area
 | E2E (VMaaS regression) | From the repository root: `uv run pytest tests/e2e/vmaas/regression/test_compute_instance_instance_type.py` | InstanceType resize through CLI/API, CatalogItem provisioning, and Kubernetes/KubeVirt resources | Requires a configured single-node VMaaS environment; no services are mocked. |
 | E2E (VMaaS additional disks) | From the repository root: `uv run pytest tests/e2e/vmaas/regression/test_compute_instance_storage_tier.py -k empty_additional_disks_disables_catalog_item_default` | CatalogItem default application versus an explicit empty `additional_disks` wrapper, checked on the ComputeInstance CR | Requires a configured VMaaS environment with storage tiers, subnet, disk image, instance type, and VM template; no services are mocked. |
 | Unit ([DEV], CaaS teardown) | From the repository root: `uv run pytest -n 0 tests/unit/test_caas_teardown_order.py tests/unit/test_cluster_deletion_polling.py tests/unit/test_caas_deletion_diagnostics.py tests/unit/test_caas_worker_bmi_visibility.py tests/unit/test_caas_two_node_sets.py tests/unit/test_caas_selector_contracts.py` | Read-only wait logic, exact-resource NotFound, ordered worker/parent/dependent waits, shared single/two-node-set budgets, stage-specific safe failures, snapshot throttling and sanitization, worker ownership checks, NodeSet selectors with shared BMITs, and shared-only BMIT reference expectations | API/client responses and time are mocked. No deployed controllers, fulfillment, AAP, provider, or metering is exercised. |
-| E2E ([QE], focused bare-metal CaaS lifecycle) | From the repository root: `uv run pytest -n 0 tests/e2e/caas/sanity/test_cluster_create.py::test_cluster_create --junitxml=/tmp/test-output/caas-bm-teardown-junit.xml` | CLI/API/database, Kubernetes, OSAC operators, AAP, HyperShift/CAPI/CAP-Agent, Assisted Service, provider-backed virtual BMHs, and Kafka/metering; creation, guest readiness, scale events, natural worker/parent teardown, independent InfraEnv GC, fulfillment removal, and deleted events | Requires the compatible deployed CaaS profile; no mocked completion or workaround-enabled deletion wait. Virtual BMHs do not prove physical-hardware coverage. Guest LVMS device readiness, PVC/CSI mount, and application I/O are not established by this lifecycle test. |
+| E2E ([QE], focused bare-metal CaaS lifecycle) | From the repository root: `uv run pytest -n 0 tests/e2e/caas/sanity/test_cluster_create.py::test_cluster_create --junitxml=/tmp/test-output/caas-bm-teardown-junit.xml` | CLI/API/database, Kubernetes, OSAC operators, AAP, HyperShift/CAPI/CAP-Agent, Assisted Service, provider-backed virtual BMHs, and Kafka/metering; catalog-item-authored creation (published ClusterCatalogItem locking version, node sets, and SSH key), guest readiness, scale events, natural worker/parent teardown, independent InfraEnv GC, fulfillment removal, and deleted events | Requires the compatible deployed CaaS profile; no mocked completion or workaround-enabled deletion wait. Virtual BMHs do not prove physical-hardware coverage. Guest LVMS device readiness, PVC/CSI mount, and application I/O are not established by this lifecycle test. |
 
 Resize lifecycle tests expect `RestartRequired`. Multi-node live hot-plug
 coverage is tracked under
@@ -599,7 +618,9 @@ invalid-version rejection are consolidated in
 `caas/regression/test_cluster_version.py`.
 
 Both `test_cluster_create` and `test_cluster_create_with_two_node_sets` use the
-same natural teardown assertions. The two-node-set scenario additionally
+same natural teardown assertions. `test_cluster_create` creates its cluster from a
+published ClusterCatalogItem; the two-node-set scenario still creates its cluster
+directly and additionally
 checks ready worker aggregates, installed Agents, and per-NodeSet
 NodePool isolation. Unit regressions additionally cover distinct NodeSets
 sharing one BMIT; that same-profile case is not exercised by this deployed

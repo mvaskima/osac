@@ -92,13 +92,15 @@ var _ = Describe("Compute instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			// Create a test virtual network and subnet for all tests to use:
+			k8sManager := "test-k8s-manager"
 			networkClassesDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
 				SetLogger(logger).
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 			_, err = networkClassesDao.Create().SetObject(privatev1.NetworkClass_builder{
-				Id: "test-network-class",
+				Id:         "test-network-class",
+				K8SManager: &k8sManager,
 				Metadata: privatev1.Metadata_builder{
 					Name:   "test-network-class",
 					Tenant: testTenant,

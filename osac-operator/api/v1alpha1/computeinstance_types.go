@@ -306,6 +306,10 @@ type ComputeInstanceStatus struct {
 	// +kubebuilder:validation:Optional
 	ProvisioningJobs []JobStatus `json:"provisioningJobs,omitempty"`
 
+	// ComputeNetworkAttachmentStatuses reports the Subnet ID and IPv4 address for each configured network attachment.
+	// +kubebuilder:validation:Optional
+	ComputeNetworkAttachmentStatuses []ComputeNetworkAttachmentStatus `json:"computeNetworkAttachmentStatuses,omitempty"`
+
 	// IPAddress is the primary IP address of the running instance, taken from the KubeVirt VirtualMachineInstance.
 	// Populated when the instance is ready (phase Running).
 	// +kubebuilder:validation:Optional
@@ -315,6 +319,16 @@ type ComputeInstanceStatus struct {
 	// Populated when an ExternalIPAttachment in state "Ready" references this ComputeInstance.
 	// +kubebuilder:validation:Optional
 	ExternalIPAddress string `json:"externalIPAddress,omitempty"`
+}
+
+// ComputeNetworkAttachmentStatus contains the discovered Subnet ID and IP address for one network attachment.
+type ComputeNetworkAttachmentStatus struct {
+	// SubnetRef is the ID of the Subnet assigned to the attachment.
+	SubnetRef string `json:"subnetRef"`
+
+	// IPAddress is the IPv4 address reported by the VMI interface.
+	// +kubebuilder:validation:Optional
+	IPAddress string `json:"ipAddress,omitempty"`
 }
 
 // +kubebuilder:object:root=true

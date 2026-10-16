@@ -434,6 +434,7 @@ func createDefaultNetworkClass(
 			Metadata:      privatev1.Metadata_builder{Name: fmt.Sprintf("%s-%s", namePrefix, uuid.New())}.Build(),
 			Title:         title,
 			FabricManager: new("cudn_net"),
+			K8SManager:    new(testVMK8SManagerName),
 			Spec: privatev1.NetworkClassSpec_builder{
 				Defaults: privatev1.NetworkDefaults_builder{
 					VirtualNetworkIpv4Cidr: virtualNetworkCIDR,

@@ -918,6 +918,38 @@ var _ = Describe("Private external IP attachments server", func() {
 			Expect(err.Error()).To(ContainSubstring("not in ALLOCATED state"))
 		})
 
+		It("Rejects Create when the ALLOCATED ExternalIP is being deleted", func() {
+			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
+				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+			eip.GetMetadata().SetFinalizers([]string{"test-finalizer"})
+			_, err := externalIPDao.Update().SetObject(eip).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = externalIPDao.Delete().SetId(eip.GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			eipResponse, err := externalIPDao.Get().SetId(eip.GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eipResponse.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+
+			ci := createComputeInstanceInState(ctx, computeInstanceDao,
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+			_, err = server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.ExternalIPAttachmentSpec_builder{
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue(), "unexpected error: %v", err)
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition), "unexpected error: %v", err)
+			Expect(err.Error()).To(ContainSubstring("is being deleted"))
+		})
+
 		It("does not use the parent attached output as an exclusivity guard", func() {
 			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
 				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, true)
@@ -961,6 +993,38 @@ var _ = Describe("Private external IP attachments server", func() {
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(err.Error()).To(ContainSubstring("ComputeInstance"))
 			Expect(err.Error()).To(ContainSubstring("does not exist"))
+		})
+
+		It("Rejects Create when the target ComputeInstance is being deleted", func() {
+			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
+				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+			ci := createComputeInstanceInState(ctx, computeInstanceDao,
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+			ci.GetMetadata().SetFinalizers([]string{"test-finalizer"})
+			_, err := computeInstanceDao.Update().SetObject(ci).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = computeInstanceDao.Delete().SetId(ci.GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			ciResponse, err := computeInstanceDao.Get().SetId(ci.GetId()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(ciResponse.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+
+			_, err = server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					}.Build(),
+					Spec: privatev1.ExternalIPAttachmentSpec_builder{
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			status, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue(), "unexpected error: %v", err)
+			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition), "unexpected error: %v", err)
+			Expect(err.Error()).To(ContainSubstring("is being deleted"))
 		})
 
 		It("Rejects Create when Cluster does not exist", func() {

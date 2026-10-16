@@ -374,6 +374,7 @@ jobs:
     - name: Lint charts
       working-directory: osac-installer
       run: |
+        make helm-topolvm-deps
         helm dependency build charts/osac/
         helm lint charts/osac-deps/
         helm lint charts/osac-infra/ --values values/dev/infra.yaml

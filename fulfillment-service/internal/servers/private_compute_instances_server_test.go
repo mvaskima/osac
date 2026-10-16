@@ -31,6 +31,7 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -46,8 +47,10 @@ var _ = Describe("Private compute instances server", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 		fabricManager := "test-strategy"
+		k8sManager := "test-k8s-manager"
 		class, err := networkClassesDao.Create().SetObject(privatev1.NetworkClass_builder{
 			FabricManager: &fabricManager,
+			K8SManager:    &k8sManager,
 			Metadata:      privatev1.Metadata_builder{Name: "test-network-class", Tenant: testTenant}.Build(),
 			Status: privatev1.NetworkClassStatus_builder{
 				State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
@@ -3982,7 +3985,29 @@ var _ = Describe("Private compute instances server", func() {
 			}.Build()
 		}
 
-		It("Auto-provisions ExternalIP and ExternalIPAttachment on create", func() {
+		It("rejects VM creation on a NetworkClass without a Kubernetes manager before creating an auto ExternalIP", func() {
+			createPool("pool-1", 5)
+
+			networkClassesDao, err := dao.NewGenericDAO[*privatev1.NetworkClass]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			unsupportedClass := proto.Clone(defaultTestNetworkClass).(*privatev1.NetworkClass)
+			unsupportedClass.ClearK8SManager()
+			_, err = networkClassesDao.Update().SetObject(unsupportedClass).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Create(ctx, createRequest(true))
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("k8s_manager"))
+
+			eips, err := externalIPDao.List().Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eips.GetItems()).To(BeEmpty())
+		})
+
+		It("creates an auto ExternalIP on ComputeInstance create and defers its attachment", func() {
 			createPool("pool-1", 5)
 
 			response, err := server.Create(ctx, createRequest(true))
@@ -4000,20 +4025,17 @@ var _ = Describe("Private compute instances server", func() {
 
 			eip := eipList.GetItems()[0]
 			Expect(eip.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
+			Expect(eip.GetMetadata().GetLabels()[autoCreatedForLabel]).To(Equal(ciID))
 			Expect(eip.GetSpec().GetPool().GetId()).To(Equal("pool-1"))
 			Expect(eip.GetStatus().GetAttached()).To(BeFalse())
 
-			// Verify ExternalIPAttachment was created
+			// Attachment creation waits for the ExternalIP allocation and ComputeInstance readiness gates.
 			eiaList, err := externalIPAttachmentDao.List().
 				SetFilter(fmt.Sprintf("this.metadata.labels['%s'] == '%s'", autoCreatedForLabel, ciID)).
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(eiaList.GetItems()).To(HaveLen(1))
-
-			eia := eiaList.GetItems()[0]
-			Expect(eia.GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
-			Expect(eia.GetSpec().GetExternalIp().GetId()).To(Equal(eip.GetId()))
-			Expect(eia.GetSpec().GetComputeInstance().GetId()).To(Equal(ciID))
+			Expect(eiaList.GetItems()).To(BeEmpty())
+			Expect(response.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
 
 			// Verify pool capacity was updated
 			poolResp, err := externalIPPoolDao.Get().SetId("pool-1").Do(ctx)
@@ -4084,7 +4106,7 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(eipList.GetItems()).To(BeEmpty())
 		})
 
-		It("Cascade-deletes auto-created resources on ComputeInstance delete", func() {
+		It("retains the ComputeInstance finalizer and auto ExternalIP until asynchronous cleanup", func() {
 			createPool("pool-1", 5)
 
 			// Create CI with auto EIP
@@ -4098,22 +4120,56 @@ var _ = Describe("Private compute instances server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 
-			// Verify ExternalIPAttachment was deleted
+			// The API request starts deletion; the reconciler removes dependents in order.
 			eiaList, err := externalIPAttachmentDao.List().Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(eiaList.GetItems()).To(BeEmpty())
 
-			// Verify ExternalIP was deleted
+			// EIP remains until the asynchronous ComputeInstance cleanup reconciler removes it.
 			eipList, err := externalIPDao.List().Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(eipList.GetItems()).To(BeEmpty())
+			Expect(eipList.GetItems()).To(HaveLen(1))
 
-			// Verify pool capacity was restored
+			ci, err := server.generic.dao.Get().SetId(ciID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(ci.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+			Expect(ci.GetObject().GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+
+			// Pool capacity is restored only when the ExternalIP controller completes deletion.
 			poolResp, err := externalIPPoolDao.Get().SetId("pool-1").Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(5)))
-			Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(0)))
+			Expect(poolResp.GetObject().GetStatus().GetAvailable()).To(Equal(int64(4)))
+			Expect(poolResp.GetObject().GetStatus().GetAllocated()).To(Equal(int64(1)))
 
+		})
+
+		It("blocks ComputeInstance deletion when a manually created attachment targets it", func() {
+			createPool("pool-1", 5)
+			response, err := server.Create(ctx, createRequest(true))
+			Expect(err).ToNot(HaveOccurred())
+			ciID := response.GetObject().GetId()
+
+			eips, err := externalIPDao.List().Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(eips.GetItems()).To(HaveLen(1))
+			_, err = externalIPAttachmentDao.Create().SetObject(privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{
+					Tenant: testTenant,
+					Name:   "manual-attachment",
+				}.Build(),
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eips.GetItems()[0].GetId()}.Build(),
+					ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ciID}.Build(),
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Delete(ctx, privatev1.ComputeInstancesDeleteRequest_builder{Id: ciID}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+
+			current, err := server.generic.dao.Get().SetId(ciID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(current.GetObject().GetMetadata().GetDeletionTimestamp()).To(BeNil())
 		})
 
 		It("Rejects update to auto_external_ip_attachment", func() {
@@ -4199,8 +4255,10 @@ var _ = Describe("Catalog materialized defaults", func() {
 				SetTenancyLogic(tenancy).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+			k8sManager := "test-k8s-manager"
 			networkClass, err := server.networkClassesDao.Create().SetObject(privatev1.NetworkClass_builder{
 				FabricManager: new("test-strategy"),
+				K8SManager:    &k8sManager,
 				Metadata:      privatev1.Metadata_builder{Name: "win-network-class", Tenant: testTenant}.Build(),
 				Status: privatev1.NetworkClassStatus_builder{
 					State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,

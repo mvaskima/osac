@@ -288,6 +288,25 @@ spec:
           status:
             description: status defines the observed state of ComputeInstance
             properties:
+              computeNetworkAttachmentStatuses:
+                description: ComputeNetworkAttachmentStatuses reports the Subnet ID
+                  and IPv4 address for each configured network attachment.
+                items:
+                  description: ComputeNetworkAttachmentStatus contains the discovered
+                    Subnet ID and IP address for one network attachment.
+                  properties:
+                    ipAddress:
+                      description: IPAddress is the IPv4 address reported by the VMI
+                        interface.
+                      type: string
+                    subnetRef:
+                      description: SubnetRef is the ID of the Subnet assigned to the
+                        attachment.
+                      type: string
+                  required:
+                  - subnetRef
+                  type: object
+                type: array
               conditions:
                 description: Conditions holds an array of metav1.Condition that describe
                   the state of the ComputeInstance
