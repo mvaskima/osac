@@ -69,18 +69,12 @@ def test_create_compute_instance_with_disk_image_includes_security_group(monkeyp
     ]
 
 
-<<<<<<< HEAD
 def test_create_and_delete_shared_baremetal_instance_type(monkeypatch: pytest.MonkeyPatch) -> None:
-=======
-def test_update_security_group_rules_rejects_omitted_ingress_and_egress(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Do not GET or Update a SecurityGroup when neither rule list is provided."""
->>>>>>> a9b09bcc5 (OSAC-5457: reject SecurityGroup updates with no rule lists)
     client = GRPCClient(address="fulfillment-api.example.test:443", token="test-token")
     calls: list[dict[str, Any]] = []
 
     def capture_call(*, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
         calls.append({"service": service, "data": data})
-<<<<<<< HEAD
         return {"object": {"id": "bmit-123"}} if service.endswith("/Create") else {}
 
     monkeypatch.setattr(client, "call", capture_call)
@@ -112,7 +106,15 @@ def test_update_security_group_rules_rejects_omitted_ingress_and_egress(monkeypa
         },
         {"service": f"{PRIVATE_API}.BareMetalInstanceTypes/Delete", "data": {"id": "bmit-123"}},
     ]
-=======
+
+
+def test_update_security_group_rules_rejects_omitted_ingress_and_egress(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Do not GET or Update a SecurityGroup when neither rule list is provided."""
+    client = GRPCClient(address="fulfillment-api.example.test:443", token="test-token")
+    calls: list[dict[str, Any]] = []
+
+    def capture_call(*, service: str, data: dict[str, Any] | None = None) -> dict[str, Any]:
+        calls.append({"service": service, "data": data})
         return {}
 
     monkeypatch.setattr(client, "call", capture_call)
@@ -145,4 +147,3 @@ def test_update_security_group_rules_updates_provided_ingress(monkeypatch: pytes
     assert calls[0]["service"] == "osac.private.v1.SecurityGroups/Get"
     assert calls[1]["service"] == "osac.private.v1.SecurityGroups/Update"
     assert calls[1]["data"]["updateMask"]["paths"] == ["spec.ingress"]
->>>>>>> a9b09bcc5 (OSAC-5457: reject SecurityGroup updates with no rule lists)
