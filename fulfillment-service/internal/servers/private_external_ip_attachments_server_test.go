@@ -414,7 +414,9 @@ var _ = Describe("Private external IP attachments server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 
-			readyTime := timestamppb.New(time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC))
+			// The first attachment time must be after the parent's creation: the source
+			// contract clamps a first time on or before it.
+			readyTime := timestamppb.New(time.Now())
 			ready := createResponse.GetObject()
 			ready.GetStatus().SetState(privatev1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_READY)
 			ready.GetStatus().SetStateTransitionTime(readyTime)
@@ -1155,6 +1157,41 @@ var _ = Describe("Private external IP attachments server", func() {
 		})
 	})
 
+	It("keeps a terminating Attachment exclusive until archive", func() {
+		eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
+			privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+		firstTarget := createComputeInstanceInState(ctx, computeInstanceDao,
+			privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+		secondTarget := createComputeInstanceInState(ctx, computeInstanceDao,
+			privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+		first, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+			Object: privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:       fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+					Finalizers: []string{"test-hold"},
+				}.Build(),
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: firstTarget.GetId()}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		_, err = server.Delete(ctx, privatev1.ExternalIPAttachmentsDeleteRequest_builder{Id: first.GetObject().GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+			Object: privatev1.ExternalIPAttachment_builder{
+				Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-%s", uuid.NewString()[:8])}.Build(),
+				Spec: privatev1.ExternalIPAttachmentSpec_builder{
+					ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: secondTarget.GetId()}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.AlreadyExists))
+	})
+
 	Describe("Immutable fields", func() {
 		It("Rejects update of spec.external_ip", func() {
 			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
@@ -1235,6 +1272,42 @@ var _ = Describe("Private external IP attachments server", func() {
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(err.Error()).To(ContainSubstring("spec.compute_instance"))
 			Expect(err.Error()).To(ContainSubstring("immutable"))
+		})
+
+		It("rejects moving a stored ExternalIPAttachment into a reserved tenant and preserves the stored object", func() {
+			eip := createExternalIPInState(ctx, externalIPDao, sharedPool.GetId(),
+				privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+			ci := createComputeInstanceInState(ctx, computeInstanceDao,
+				privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+
+			createResponse, err := server.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{
+				Object: privatev1.ExternalIPAttachment_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.ExternalIPAttachmentSpec_builder{
+						ExternalIp:      privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+						ComputeInstance: privatev1.ComputeInstanceLocalReference_builder{Id: ci.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			_, err = server.Update(ctx, privatev1.ExternalIPAttachmentsUpdateRequest_builder{
+				Object: privatev1.ExternalIPAttachment_builder{
+					Id:       id,
+					Metadata: privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
+			Expect(err.Error()).To(ContainSubstring("objects cannot be placed in the 'shared' tenant"))
+
+			stored, getErr := server.Get(ctx, privatev1.ExternalIPAttachmentsGetRequest_builder{Id: id}.Build())
+			Expect(getErr).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetMetadata().GetTenant()).To(Equal(testTenant))
 		})
 	})
 
