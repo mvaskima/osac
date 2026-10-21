@@ -425,10 +425,13 @@ jobs:
         # the real release version instead of its committed dev default --
         # and so Konflux's release-side {{ oci_version }} tag templating
         # (see cloud-extensions-stage.yaml's RPA mapping) resolves to it.
-        # osac-aap has no entry: it builds via ansible-builder from
-        # execution-environment.yaml, not a Containerfile, and isn't part
-        # of Konflux's image pipeline yet (see hermetic-release-pipeline
-        # memory/doc) -- nothing to stamp or tag for it here.
+        # osac-aap has no entry here: it builds via ansible-builder, which
+        # dynamically generates its own Containerfile inside the Konflux
+        # pipeline itself (.tekton/osac-aap/*.yaml's generate-ee-context
+        # task) -- there is no committed Containerfile in this repo to sed
+        # a version into. Its release.yaml variant stamps its own
+        # org.opencontainers.image.version label directly, by resolving
+        # its real osac-aap/vX.Y.Z tag by name inside that same task.
         declare -A COMPONENT_CONTAINERFILES=(
           ["osac-operator"]="osac-operator/Containerfile"
           ["fulfillment-service"]="fulfillment-service/Containerfile"
@@ -784,16 +787,8 @@ jobs:
   # -------------------------------------------------------------------
   unit-tests:
     name: Unit tests
-    # pull-requests: read matches what unit-tests.yml's own `changes` job
-    # declares (for dorny/paths-filter) -- unused on a workflow_call trigger
-    # (that step's own `if:` only matches pull_request/merge_group), but
-    # GitHub statically validates a called local reusable workflow's job
-    # permissions against the caller's grant regardless of runtime `if:`
-    # guards, so it still must be granted here or the whole run fails to
-    # start.
     permissions:
       contents: read
-      pull-requests: read
     # Skippable via the skip_unit input, same shape as skip_integration/
     # skip_e2e below but independent of them: both callers pass this
     # through from their own workflow_dispatch input; the nightly
@@ -804,10 +799,8 @@ jobs:
 
   integration-tests:
     name: Integration tests
-    # See unit-tests' comment above -- same reason.
     permissions:
       contents: read
-      pull-requests: read
     # Skippable via the skip_integration input, same shape as skip_e2e
     # above but independent of it: both callers pass this through from
     # their own workflow_dispatch input; the nightly scheduled trigger
@@ -1590,7 +1583,7 @@ jobs:
     # fires on both nightly and release runs -- only its message differs --
     # so it can't be used as a trigger for anything that should fire on
     # real releases only. This tag exists purely so Konflux's
-    # Pipelines-as-Code can distinguish the two (see .tekton/*-release.yaml,
+    # Pipelines-as-Code can distinguish the two (see .tekton/*/release.yaml,
     # which trigger on refs/tags/osac-release/*). Not consumed by anything
     # in this repo itself.
     - name: Create release-only marker tag
@@ -1985,7 +1978,7 @@ jobs:
   # -------------------------------------------------------------------
   # Wait for Konflux build — one job per component (matrix, same shape as
   # `build` above), each polling for that component's own release-
-  # triggered Konflux build (see .tekton/*-release.yaml) to produce a
+  # triggered Konflux build (see .tekton/*/release.yaml) to produce a
   # passing Snapshot for this exact commit. Split out of what used to be
   # trigger-konflux-staging-release's own first phase purely so each
   # component's wait gets its own status/logs in the Actions UI, the same
@@ -1996,7 +1989,7 @@ jobs:
   wait-for-konflux-build:
     name: Wait for Konflux build (${{ matrix.component }})
     # Release mode only -- the osac-release/v<version> tag (which Konflux's
-    # Pipelines-as-Code triggers off, see .tekton/*-release.yaml) is itself
+    # Pipelines-as-Code triggers off, see .tekton/*/release.yaml) is itself
     # only pushed in release mode (see "Create release-only marker tag"
     # above). Needs tag specifically (not e.g. promote-and-publish) because
     # that's the job that actually pushes the tag Konflux reacts to --
@@ -2033,6 +2026,7 @@ jobs:
           - metering-service
           - metering-m360-adapter
           - metering-echo-adapter
+          - osac-aap
     permissions:
       contents: read
 
@@ -2385,7 +2379,7 @@ jobs:
     name: Trigger Konflux staging release
     # Same release-only, tag-gated, skip-cascade-safe reasoning as
     # wait-for-konflux-build's own needs/if comment above -- also needs
-    # that job directly since this one consumes its 8 uploaded fragments.
+    # that job directly since this one consumes its 9 uploaded fragments.
     needs: [prepare, tag, wait-for-konflux-build]
     if: |
       always() && !cancelled() && inputs.mode == 'release' &&
@@ -2407,7 +2401,7 @@ jobs:
     steps:
     # One fragment per component, each written by wait-for-konflux-build's
     # own matrix row -- a job that succeeded (this job's own needs: above
-    # requires it) by construction produced exactly 8.
+    # requires it) by construction produced exactly 9.
     - name: Download component build fragments
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
       with:
@@ -2421,19 +2415,19 @@ jobs:
         openshift_token: ${{ secrets.KONFLUX_SA_TOKEN }}
         namespace: osac-tenant
 
-    # Assembles wait-for-konflux-build's 8 per-component fragments into
+    # Assembles wait-for-konflux-build's 9 per-component fragments into
     # one override Snapshot (Konflux's documented mechanism for combining
     # independently-built components -- PR-scoped group-snapshot auto-
     # combining doesn't apply here, this is a tag push, not a PR), waits
     # for that override Snapshot's own integration test to pass, then
     # creates a Release against the cloud-extensions-stage ReleasePlan.
-    # Deliberately still ONE Release of all 8 components, not matrixed:
+    # Deliberately still ONE Release of all 9 components, not matrixed:
     # a Konflux Release processes its whole referenced Snapshot as a
     # single atomic unit, so splitting this into one Release per
-    # component would mean either 8 redundant Releases of the exact same
-    # combined Snapshot, or 8 independent releases each from its own
+    # component would mean either 9 redundant Releases of the exact same
+    # combined Snapshot, or 9 independent releases each from its own
     # single-component build Snapshot -- the latter would drop this
-    # job's whole reason for existing (confirming all 8 components
+    # job's whole reason for existing (confirming all 9 components
     # actually work together before anything ships) and let a release
     # ship some components while others silently fail. Production is
     # deliberately never touched by this job -- no ReleasePlan exists for
