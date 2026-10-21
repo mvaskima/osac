@@ -783,7 +783,7 @@ class TestVmaasTenantIsolation:
     def test_05_live_security_group_stateful(
         self, jwt_grpc_tenant1: GRPCClient, private_grpc: GRPCClient, fulfillment_address: str
     ) -> None:
-        """Assert live SG rule clears stop ICMP and restore brings it back."""
+        """Assert live SG updates are stateful: ingress-only vs both directions."""
         _require(self.state, "t1_sg_id", "t1_vm1", "t1_vm2")
         sg_id = self.state["t1_sg_id"]
         vm1 = self.state["t1_vm1"]
@@ -798,7 +798,7 @@ class TestVmaasTenantIsolation:
             sg = jwt_grpc_tenant1.get_security_group(sg_id=sg_id)
             assert _rule_list(_spec(sg), "ingress") == []
             assert _rule_list(_spec(sg), "egress"), "ingress-only update must leave egress rules"
-            _assert_ping_stops(
+            _assert_ping_succeeds(
                 jwt_grpc_tenant1, fulfillment_address, vm1["id"], dest_ip, "ICMP after ingress-only SecurityGroup clear"
             )
 
