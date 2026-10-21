@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable
 
 import websocket
+import yaml
 
 from tests.e2e.core.grpc_client import GRPCClient
 
@@ -23,6 +24,11 @@ _PING_TIMEOUT_S = 40.0
 _ENTER_INTERVAL_S = 15.0
 
 
+def _yaml_quoted_scalar(value: str) -> str:
+    """Return value as a double-quoted YAML scalar so # and ': ' stay data."""
+    return yaml.safe_dump(value, default_style='"', default_flow_style=True, allow_unicode=True, width=10**9).strip()
+
+
 def user_data(*, password: str, username: str = CONSOLE_USER) -> str:
     """Cloud-init userdata that sets a serial-console password for guest ping."""
     return (
@@ -31,8 +37,8 @@ def user_data(*, password: str, username: str = CONSOLE_USER) -> str:
         "chpasswd:\n"
         "  expire: false\n"
         "  users:\n"
-        f"    - name: {username}\n"
-        f"      password: {password}\n"
+        f"    - name: {_yaml_quoted_scalar(username)}\n"
+        f"      password: {_yaml_quoted_scalar(password)}\n"
         "      type: text\n"
     )
 

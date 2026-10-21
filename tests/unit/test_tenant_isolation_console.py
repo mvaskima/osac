@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import pytest
+import yaml
 
-from tests.e2e.vmaas.regression.tenant_isolation_console import _canonical_dest_ip, _logged_in
+from tests.e2e.vmaas.regression.tenant_isolation_console import _canonical_dest_ip, _logged_in, user_data
 
 
 @pytest.mark.parametrize(
@@ -76,3 +77,15 @@ def test_logged_in_escapes_username_in_prompt_match() -> None:
     """Usernames with regex metacharacters still match username@ on the last line."""
     assert _logged_in("user.name@host", "user.name") is True
     assert _logged_in("username@host", "user.name") is False
+
+
+@pytest.mark.parametrize(
+    ("username", "password"), [("fedora", "plainpass"), ("user: name", "p#w: d"), ('user"name', 'pass"word')]
+)
+def test_user_data_round_trips_quoted_credentials(username: str, password: str) -> None:
+    """Username and password remain intact after YAML parse, including # and ': '."""
+    parsed = yaml.safe_load(user_data(password=password, username=username))
+    user = parsed["chpasswd"]["users"][0]
+    assert user["name"] == username
+    assert user["password"] == password
+    assert user["type"] == "text"
