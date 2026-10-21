@@ -213,29 +213,28 @@ class GRPCClient:
     def update_security_group_rules(
         self, *, sg_id: str, ingress: list[dict[str, Any]] | None = None, egress: list[dict[str, Any]] | None = None
     ) -> dict[str, Any]:
-        """GET-merge then Update SecurityGroup ingress and/or egress rules."""
-        # Live rule changes use public Update (OSAC-5679). GET-merge the stored
-        # object so omitted spec fields, including immutable virtual_network,
-        # are not cleared.
+        """Replace SecurityGroup rule lists via public Update (OSAC-5679)."""
+        # Public Update always writes both complete lists and has no update_mask.
+        # GET-merge an omitted list so the other direction is not cleared. Send
+        # only id plus spec.ingress/egress: private metadata.finalizers is not a
+        # public Metadata field, and grpcurl rejects unknown JSON names.
         if ingress is None and egress is None:
             raise ValueError("update_security_group_rules requires ingress and/or egress")
-        current: dict[str, Any] = self.call(service=f"{PRIVATE_API}.SecurityGroups/Get", data={"id": sg_id})
-        obj = current.get("object")
-        existing: dict[str, Any] = obj if isinstance(obj, dict) else current
-        spec: dict[str, Any] = dict(existing.get("spec") or {})
-        paths: list[str] = []
-        if ingress is not None:
-            spec["ingress"] = ingress
-            paths.append("spec.ingress")
-        if egress is not None:
-            spec["egress"] = egress
-            paths.append("spec.egress")
-        payload: dict[str, Any] = {"id": sg_id, "spec": spec}
-        metadata = existing.get("metadata")
-        if isinstance(metadata, dict):
-            payload["metadata"] = metadata
+        if ingress is None or egress is None:
+            current = self.get_security_group(sg_id=sg_id)
+            obj = current.get("object")
+            existing: dict[str, Any] = obj if isinstance(obj, dict) else current
+            spec = existing.get("spec")
+            stored: dict[str, Any] = spec if isinstance(spec, dict) else {}
+            if ingress is None:
+                stored_ingress = stored.get("ingress")
+                ingress = list(stored_ingress) if isinstance(stored_ingress, list) else []
+            if egress is None:
+                stored_egress = stored.get("egress")
+                egress = list(stored_egress) if isinstance(stored_egress, list) else []
         return self.call(
-            service=f"{PUBLIC_API}.SecurityGroups/Update", data={"object": payload, "updateMask": {"paths": paths}}
+            service=f"{PUBLIC_API}.SecurityGroups/Update",
+            data={"object": {"id": sg_id, "spec": {"ingress": ingress, "egress": egress}}},
         )
 
     # Console operations
