@@ -137,10 +137,17 @@ def _wait_for_login_prompt(
     )
 
 
+def _last_nonempty_line(text: str) -> str:
+    """Return the last non-empty console line after normalizing CR."""
+    for line in reversed(text.replace("\r", "").split("\n")):
+        if line.strip():
+            return line
+    return ""
+
+
 def _has_login_prompt(text: str) -> bool:
-    """Return True when accumulated console text ends with a login prompt."""
-    normalized = text.replace("\r", "")
-    return bool(re.search(r"(?im)^[^\n]*login:\s*$", normalized))
+    """Return True when the last non-empty console line is a login prompt."""
+    return bool(re.search(r"(?i)login:\s*$", _last_nonempty_line(text)))
 
 
 def _authenticate(
@@ -163,14 +170,6 @@ def _authenticate(
         raise AssertionError(
             f"Console login failed for {username} ({len(accumulated)} bytes, login_incorrect={login_incorrect})"
         )
-
-
-def _last_nonempty_line(text: str) -> str:
-    """Return the last non-empty console line after normalizing CR."""
-    for line in reversed(text.replace("\r", "").split("\n")):
-        if line.strip():
-            return line
-    return ""
 
 
 def _logged_in(text: str, username: str) -> bool:

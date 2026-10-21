@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 import yaml
 
-from tests.e2e.vmaas.regression.tenant_isolation_console import _canonical_dest_ip, _logged_in, user_data
+from tests.e2e.vmaas.regression.tenant_isolation_console import (
+    _canonical_dest_ip,
+    _has_login_prompt,
+    _logged_in,
+    user_data,
+)
 
 
 @pytest.mark.parametrize(
@@ -71,6 +76,22 @@ def test_logged_in_accepts_prompt_on_final_nonempty_line(text: str) -> None:
 def test_logged_in_rejects_markers_not_on_final_prompt_line(text: str) -> None:
     """Shell markers elsewhere, login-incorrect, and empty output are not a shell."""
     assert _logged_in(text, "fedora") is False
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("localhost login: ", True),
+        ("fedora login:\n", True),
+        ("localhost login:\n\n", True),
+        ("fedora login:\n[fedora@host ~]$ ", False),
+        ("login: \nPassword: ", False),
+        ("", False),
+    ],
+)
+def test_has_login_prompt_uses_final_nonempty_line(text: str, expected: bool) -> None:
+    """A login prompt counts only when it is the last non-empty console line."""
+    assert _has_login_prompt(text) is expected
 
 
 def test_logged_in_escapes_username_in_prompt_match() -> None:

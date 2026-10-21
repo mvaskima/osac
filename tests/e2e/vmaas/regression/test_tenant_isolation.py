@@ -468,6 +468,28 @@ def _best_effort_delete_disk_image(client: GRPCClient, disk_image_id: str | None
         logger.warning("Failed to delete DiskImage %s: %s", disk_image_id, type(exc).__name__)
 
 
+def _copycat_vm_entries(state: dict[str, Any]) -> list[dict[str, str]]:
+    """Return unique copycat VMs from copycat_vms and copycat_vm, skipping invalid entries."""
+    candidates: list[object] = []
+    listed = state.get("copycat_vms")
+    if isinstance(listed, list):
+        candidates.extend(listed)
+    current = state.get("copycat_vm")
+    if current is not None:
+        candidates.append(current)
+    seen: set[str] = set()
+    unique: list[dict[str, str]] = []
+    for vm in candidates:
+        if not isinstance(vm, dict):
+            continue
+        ci_id = vm.get("id")
+        if not isinstance(ci_id, str) or not ci_id or ci_id in seen:
+            continue
+        seen.add(ci_id)
+        unique.append(vm)
+    return unique
+
+
 def _cleanup_resources(
     state: dict[str, Any],
     jwt_grpc_tenant1: GRPCClient,
@@ -480,12 +502,8 @@ def _cleanup_resources(
     _best_effort_delete_vm(jwt_grpc_tenant1, k8s, state.get("t1_vm2"))
     _best_effort_delete_vm(jwt_grpc_tenant2, k8s, state.get("t2_vm1"))
     _best_effort_delete_vm(jwt_grpc_tenant2, k8s, state.get("t2_vm2"))
-    copycat_vms = state.get("copycat_vms")
-    if isinstance(copycat_vms, list) and copycat_vms:
-        for vm in copycat_vms:
-            _best_effort_delete_vm(jwt_grpc_tenant2, k8s, vm)
-    else:
-        _best_effort_delete_vm(jwt_grpc_tenant2, k8s, state.get("copycat_vm"))
+    for vm in _copycat_vm_entries(state):
+        _best_effort_delete_vm(jwt_grpc_tenant2, k8s, vm)
     _best_effort_delete_overlay(jwt_grpc_tenant2, k8s, "copycat", state)
     _best_effort_delete_overlay(jwt_grpc_tenant1, k8s, "t1", state)
     _best_effort_delete_overlay(jwt_grpc_tenant2, k8s, "t2", state)
@@ -813,14 +831,10 @@ class TestVmaasTenantIsolation:
         to_delete: list[tuple[str | None, dict[str, str]]] = []
         for key in ("t2_vm1", "t2_vm2"):
             vm = self.state.get(key)
-            if vm:
+            if isinstance(vm, dict) and vm.get("id"):
                 to_delete.append((key, vm))
-        copycat_vms = self.state.get("copycat_vms")
-        if isinstance(copycat_vms, list) and copycat_vms:
-            for vm in copycat_vms:
-                to_delete.append((None, vm))
-        elif self.state.get("copycat_vm"):
-            to_delete.append(("copycat_vm", self.state["copycat_vm"]))
+        for vm in _copycat_vm_entries(self.state):
+            to_delete.append((None, vm))
         seen: set[str] = set()
         for key, vm in to_delete:
             ci_id = vm["id"]
