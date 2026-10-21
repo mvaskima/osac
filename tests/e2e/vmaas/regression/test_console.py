@@ -45,7 +45,10 @@ def _ensure_hub_access_console_rbac(k8s_hub_client: K8sClient, namespace: str) -
         yield
     finally:
         if patched:
-            remove_hub_access_console_rbac(k8s=k8s_hub_client, namespace=namespace)
+            try:
+                remove_hub_access_console_rbac(k8s=k8s_hub_client, namespace=namespace)
+            except Exception as exc:
+                logger.warning("Failed to remove hub-access console RBAC for %s: %s", namespace, type(exc).__name__)
 
 
 @pytest.fixture(scope="module")

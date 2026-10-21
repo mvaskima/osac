@@ -145,5 +145,5 @@ def test_update_security_group_rules_updates_provided_ingress(monkeypatch: pytes
     client.update_security_group_rules(sg_id="security-group-id", ingress=[])
 
     assert calls[0]["service"] == "osac.private.v1.SecurityGroups/Get"
-    assert calls[1]["service"] == "osac.private.v1.SecurityGroups/Update"
+    assert calls[1]["service"] == "osac.public.v1.SecurityGroups/Update"
     assert calls[1]["data"]["updateMask"]["paths"] == ["spec.ingress"]

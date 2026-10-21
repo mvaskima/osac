@@ -113,12 +113,7 @@ class GRPCClient:
     def create_virtual_network(self, *, name: str, ipv4_cidr: str, tenant: str | None = None) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.VirtualNetworks/Create",
-            data={
-                "object": {
-                    "metadata": _metadata(name=name, tenant=tenant),
-                    "spec": {"ipv4_cidr": ipv4_cidr},
-                }
-            },
+            data={"object": {"metadata": _metadata(name=name, tenant=tenant), "spec": {"ipv4_cidr": ipv4_cidr}}},
         )
         return response["object"]["id"]
 
@@ -218,10 +213,10 @@ class GRPCClient:
     def update_security_group_rules(
         self, *, sg_id: str, ingress: list[dict[str, Any]] | None = None, egress: list[dict[str, Any]] | None = None
     ) -> dict[str, Any]:
-        """GET-merge then privately Update SecurityGroup ingress and/or egress rules."""
-        # Public SecurityGroups/Update was removed (OSAC-5373). Live rule
-        # changes use private Update. GET-merge the stored object so omitted
-        # spec fields, including immutable virtual_network, are not cleared.
+        """GET-merge then Update SecurityGroup ingress and/or egress rules."""
+        # Live rule changes use public Update (OSAC-5679). GET-merge the stored
+        # object so omitted spec fields, including immutable virtual_network,
+        # are not cleared.
         if ingress is None and egress is None:
             raise ValueError("update_security_group_rules requires ingress and/or egress")
         current: dict[str, Any] = self.call(service=f"{PRIVATE_API}.SecurityGroups/Get", data={"id": sg_id})
@@ -240,7 +235,7 @@ class GRPCClient:
         if isinstance(metadata, dict):
             payload["metadata"] = metadata
         return self.call(
-            service=f"{PRIVATE_API}.SecurityGroups/Update", data={"object": payload, "updateMask": {"paths": paths}}
+            service=f"{PUBLIC_API}.SecurityGroups/Update", data={"object": payload, "updateMask": {"paths": paths}}
         )
 
     # Console operations
@@ -289,8 +284,7 @@ class GRPCClient:
             offset = 0
             while True:
                 response: dict[str, Any] = self.call(
-                    service=f"{PRIVATE_API}.Tenants/List",
-                    data={"offset": offset, "limit": 100},
+                    service=f"{PRIVATE_API}.Tenants/List", data={"offset": offset, "limit": 100}
                 )
                 page = response.get("items", [])
                 items.extend(item for item in page if item.get("metadata", {}).get("name") == name)
@@ -334,12 +328,7 @@ class GRPCClient:
     def create_external_ip(self, *, name: str, pool: str, tenant: str | None = None) -> str:
         response: dict[str, Any] = self.call(
             service=f"{PUBLIC_API}.ExternalIPs/Create",
-            data={
-                "object": {
-                    "metadata": _metadata(name=name, tenant=tenant),
-                    "spec": {"pool": {"id": pool}},
-                }
-            },
+            data={"object": {"metadata": _metadata(name=name, tenant=tenant), "spec": {"pool": {"id": pool}}}},
         )
         return response["object"]["id"]
 
